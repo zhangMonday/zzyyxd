@@ -18,9 +18,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from serverchan_sdk import sc_send
 
 try:
-    from AliV2 import AliV3
+    from AliV3 import AliV3
 except ImportError:
-    print("❌ 错误: 未找到 登录依赖(AliV2.py) 文件，请确保同目录下存在该文件，")
+    print("❌ 错误: 未找到 登录依赖(AliV3.py) 文件，请确保同目录下存在该文件，")
     sys.exit(1)
 
 # 全局变量用于收集总结日志
@@ -586,7 +586,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
 
     try:
         # 1. 登录流程
-        log(f"账号 {account_index} - 正在调用 登录(AliV2) 脚本进行登录...")
+        log(f"账号 {account_index} - 正在调用 登录(AliV3) 脚本进行登录...")
         
         auth_code = None
         ali_output = ""
@@ -599,7 +599,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                 ali = AliV3()
                 ali.main(username=username, password=password)
             except Exception as e:
-                print(f"Error executing AliV2: {e}")
+                print(f"Error executing AliV3: {e}")
         
         ali_output = f.getvalue()
         
@@ -650,7 +650,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         else:
             # 既没有 authCode 也没有密码错误信息
             log("❌登录脚本异常：")
-            log(ali_output)  # 输出 AliV2 的全部内容
+            log(ali_output)  # 输出 AliV3 的全部内容
             result['oshwhub_status'] = '登录脚本异常'
             return result # 返回失败，触发外部重试
 
