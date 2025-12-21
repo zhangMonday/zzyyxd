@@ -14,12 +14,8 @@ import execjs
 from Utils import MatchArgs, pwdEncrypt
 
 # ==============================================================================
-# 修复：注释掉导致报错的代理获取代码
+# 代理配置 (已禁用)
 # ==============================================================================
-# prox = requests.get(
-#     'http://bapi.51daili.com/getapi2?linePoolIndex=-1&packid=2&time=2&qty=1&port=1&format=txt&usertype=17&uid=55442').text
-#
-# print(prox)
 proxy = None
 # ==============================================================================
 
@@ -38,14 +34,14 @@ class AliV3:
         self.sign_key2 = "fpOKzILEajkqgSpr9VvU98FwAgIRcX"
         self.author = '古月'
         
+        # 初始化 Session
+        self.session = requests.Session()
+        
         # 初始化账号密码变量
         self.username = None
         self.password = None
 
-        # 接收外部传入的动态参数
-        self.custom_cookies = {}
-        self.custom_headers = {}
-
+        # 基础 Headers
         self.headers = {
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -63,6 +59,9 @@ class AliV3:
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': '"Windows"',
         }
+        
+        # 更新 Session 的基础 Headers
+        self.session.headers.update(self.headers)
 
     def get_sign(self, params, key):
         with open('sign.js', 'r', encoding='utf-8') as f:
@@ -94,6 +93,7 @@ class AliV3:
         data['DeviceData'] = DeviceData
         data = self.get_sign(data, self.sign_key1)
 
+        # 这里的请求与 JLC 主站无关，使用普通的 requests 即可，也可以用 session
         response = requests.post('https://1tbpug.captcha-open.aliyuncs.com/', headers=self.headers, data=data,
                                  proxies=proxy)
 
@@ -210,10 +210,10 @@ class AliV3:
         args = MatchArgs(self.StaticPath)
         if args is None:
             print('StaticPath not found')
-            # 重试逻辑：传递参数
             if self.username and self.password:
                 print("Retry executing main...")
-                self.main(self.username, self.password, self.custom_cookies, self.custom_headers)
+                # 重试时不重新传入 cookies/headers，复用 session
+                self.main(self.username, self.password)
             else:
                 print("Error: Args missing for retry.")
             return
@@ -225,36 +225,14 @@ class AliV3:
         print('deviceToekn', deviceToekn)
         print('_data', _data)
 
-        import requests
-
-        # 默认 Cookie (保留基础结构，实际会被 custom_cookies 覆盖/更新)
-        cookies = {
-            'device_id': 'c7d0a5f4b554477fae0e1ba29f84fb63',
-            '__sameSiteCheck__': '1',
-        }
-        
-        # 合并传入的 Cookie
-        if self.custom_cookies:
-            print("Using custom cookies for Submit_All")
-            cookies.update(self.custom_cookies)
-
-        headers = {
+        # 更新请求特定的 Headers
+        self.session.headers.update({
             'accept': 'application/json, text/plain, */*',
-            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-            'cache-control': 'no-cache, no-store, must-revalidate',
             'content-type': 'application/json',
             'origin': 'https://passport.jlc.com',
             'referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-            # 默认值，后续会被覆盖
-            'secretkey': '35616236663038352d643366382d343131662d396239622d366439643132653639373764',
-            'x-jlc-clientuuid': '445de653-7a24-4242-88dd-0878479726aa-1766237894098',
-        }
-
-        # 合并传入的 Headers (主要是 secretkey 和 uuid)
-        if self.custom_headers:
-             print("Using custom headers for Submit_All")
-             headers.update(self.custom_headers)
+            # secretkey 和 uuid 已经在 main 中通过 update headers 放入了 session
+        })
 
         captcha_verify_param = {
             "sceneId": "6mw4mrmg",
@@ -271,10 +249,9 @@ class AliV3:
             'aliyunSceneId': '6mw4mrmg',
         }
 
-        response = requests.post(
+        # 使用 Session 发送请求，自动携带 cookies
+        response = self.session.post(
             'https://passport.jlc.com/api/cas/captcha/v2/check-ali-captcha',
-            cookies=cookies,
-            headers=headers,
             json=json_data
         )
 
@@ -291,45 +268,14 @@ class AliV3:
             print("Skipping login: No captchaTicket acquired.")
             return
 
-        import requests
-        
-        # 默认 Cookie
-        cookies = {
-            'JSESSIONID': '',
-            'device_id': 'c7d0a5f4b554477fae0e1ba29f84fb63',
-            '__sameSiteCheck__': '1',
-        }
-        
-        # 合并传入的 Cookie
-        if self.custom_cookies:
-             cookies.update(self.custom_cookies)
-
-        headers = {
+        # 更新 Headers
+        self.session.headers.update({
             'accept': 'application/json, text/plain, */*',
-            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-            'cache-control': 'no-cache, no-store, must-revalidate',
             'content-type': 'application/json',
-            'expires': '0',
             'origin': 'https://passport.jlc.com',
-            'pragma': 'no-cache',
-            'priority': 'u=1, i',
             'referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
-            'sec-ch-ua': '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-            'support-cookie-samesite': 'true',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-            # 默认值，会被覆盖
-            'secretkey': '35616236663038352d643366382d343131662d396239622d366439643132653639373764',
-            'x-jlc-clientuuid': '445de653-7a24-4242-88dd-0878479726aa-1766237894098',
-        }
-        
-        # 合并传入的 Headers
-        if self.custom_headers:
-             headers.update(self.custom_headers)
+            # 移除所有硬编码的 Cookie 设置，完全依赖 Session
+        })
 
         json_data = {
             'username': username,
@@ -338,34 +284,39 @@ class AliV3:
             'captchaTicket': self.captchaTicket,
         }
 
-        response = requests.post('https://passport.jlc.com/api/cas/login/with-password', cookies=cookies,
-                                 headers=headers, json=json_data)
+        # 使用 Session 发送请求
+        response = self.session.post(
+            'https://passport.jlc.com/api/cas/login/with-password', 
+            json=json_data
+        )
 
         print(response.text)
 
-    def test(self):
-        pass
-
     def main(self, username, password, cookies=None, headers=None):
-        # 保存参数到实例变量
         self.username = username
         self.password = password
         
+        # 1. 设置 Cookies (如果传入)
         if cookies:
-            self.custom_cookies = cookies
+            print("Loading custom cookies into session...")
+            requests.utils.add_dict_to_cookiejar(self.session.cookies, cookies)
+        
+        # 2. 设置 Headers (如果传入，主要覆盖 secretkey 和 uuid)
         if headers:
-            self.custom_headers = headers
+            print("Loading custom headers into session...")
+            self.session.headers.update(headers)
 
-        # 使用 self 调用实例方法
+        # 3. 阿里云验证流程
         self.Req_Init()
         self.decrypt_DeviceConfig()
         self.GetDynamic_Key()
         self.GetLog2()
         self.GetLog3()
         
+        # 4. 获取验证码票据 (会更新 session cookie)
         res = self.Sumbit_All()
         
-        # 传递加密后的账号密码进行登录
+        # 5. 登录 (复用 session cookie)
         enc_username = pwdEncrypt(username)
         enc_password = pwdEncrypt(password)
         self.Login(enc_username, enc_password)
@@ -374,12 +325,7 @@ class AliV3:
 
 if __name__ == '__main__':
     ali = AliV3()
-    
-    # 检查命令行参数
     if len(sys.argv) >= 3:
-        user_arg = sys.argv[1]
-        pass_arg = sys.argv[2]
-        ali.main(user_arg, pass_arg)
+        ali.main(sys.argv[1], sys.argv[2])
     else:
         print("用法: python AliV3.py <username> <password>")
-        print("示例: python AliV3.py 13800138000 MyPassword123")
