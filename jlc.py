@@ -18,22 +18,37 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from serverchan_sdk import sc_send
 
+# ==========================================
+# 修复 Python 3.7 在 CI 环境下的 platform Bug
+# ==========================================
 try:
     platform.system()
 except TypeError:
-    # 如果原生调用报错 (can't concat str to bytes)，强制打补丁
     print("⚠ 检测到 Python 3.7 platform Bug，正在应用补丁...")
     platform.system = lambda: 'Linux'
 
-try:
-    from AliV3 import AliV3
-except ImportError:
-    print("❌ 错误: 未找到 登录依赖(AliV3.py) 文件，请确保同目录下存在该文件")
-    sys.exit(1)
-except Exception as e:
-    # 捕获 execjs 可能的其他异常
-    print(f"❌ 导入 AliV3 时发生错误: {e}")
-    pass
+# ==========================================
+# 带重试机制的 AliV3 导入逻辑
+# ==========================================
+AliV3 = None
+max_import_retries = 5
+for attempt in range(max_import_retries):
+    try:
+        from AliV3 import AliV3
+        print("✅ 成功加载 AliV3 登录依赖")
+        break
+    except ImportError:
+        print("❌ 错误: 未找到 登录依赖(AliV3.py) 文件，请确保同目录下存在该文件")
+        sys.exit(1)
+    except Exception as e:
+        print(f"⚠ 导入 AliV3 失败 (尝试 {attempt + 1}/{max_import_retries}): {e}")
+        if attempt < max_import_retries - 1:
+            wait_time = random.randint(3, 6)
+            print(f"⏳ 网络可能不稳定，等待 {wait_time} 秒后重试导入...")
+            time.sleep(wait_time)
+        else:
+            print("❌ 无法导入 AliV3，可能是网络问题导致其初始化失败，程序退出。")
+            sys.exit(1)
 
 # 全局变量用于收集总结日志
 in_summary = False
@@ -601,7 +616,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         log(f"账号 {account_index} - 正在调用 登录(AliV3) 脚本进行登录...")
         
         # 确保 AliV3 已加载
-        if 'AliV3' not in globals():
+        if AliV3 is None:
              log(f"账号 {account_index} - ❌ 登录依赖未正确加载，无法登录")
              result['oshwhub_status'] = '依赖缺失'
              return result
