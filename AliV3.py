@@ -13,18 +13,23 @@ import execjs
 
 from Utils import MatchArgs, pwdEncrypt
 
-prox = requests.get(
-    'http://bapi.51daili.com/getapi2?linePoolIndex=-1&packid=2&time=2&qty=1&port=1&format=txt&usertype=17&uid=55442').text
-
-print(prox)
+# ==============================================================================
+# 修复：注释掉导致报错的代理获取代码
+# 原代码在 import 时会请求 51daili.com 导致 ConnectionResetError
+# ==============================================================================
+# prox = requests.get(
+#     'http://bapi.51daili.com/getapi2?linePoolIndex=-1&packid=2&time=2&qty=1&port=1&format=txt&usertype=17&uid=55442').text
+#
+# print(prox)
 
 # prox = ''
 
-proxy = {
-    "https": "http://" + prox,
-    "http": "http://" + prox,
-}
+# proxy = {
+#     "https": "http://" + prox,
+#     "http": "http://" + prox,
+# }
 proxy = None
+# ==============================================================================
 
 
 class AliV3:
@@ -125,6 +130,10 @@ class AliV3:
         
         filename = f'fenlin_temp_{self.CertifyId}.js'
         filepath = os.path.join('./temp', filename)
+
+        # 确保temp目录存在
+        if not os.path.exists('./temp'):
+            os.makedirs('./temp')
 
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(jscode)
