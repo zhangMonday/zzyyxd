@@ -4,6 +4,7 @@ import random
 import subprocess
 import time
 import sys
+import uuid  # 新增：用于生成随机设备ID
 from functools import partial
 
 subprocess.Popen = partial(subprocess.Popen, encoding='utf-8', errors='ignore')
@@ -13,14 +14,26 @@ import execjs
 
 from Utils import MatchArgs, pwdEncrypt
 
-# 代理配置 (保持原样)
+# 代理配置
 proxy = None
 
 class AliV3:
     def __init__(self):
-        # 1. 初始化 Session，用于自动管理 Cookies
+        # 1. 初始化 Session
         self.session = requests.Session()
         
+        # 2. 【关键修复】生成随机的设备ID和客户端UUID
+        # 必须保持整个会话期间一致，否则滑块验证会失败
+        self.device_id = str(uuid.uuid4()).replace('-', '')
+        self.client_uuid = f"{str(uuid.uuid4())}-{int(time.time()*1000)}"
+        
+        print(f"初始化虚拟设备 ID: {self.device_id}")
+        
+        # 3. 将 device_id 注入到 session 的 cookies 中
+        # 这是之前报 500 错误的根本原因：缺少 device_id
+        self.session.cookies.set('device_id', self.device_id, domain='passport.jlc.com')
+        self.session.cookies.set('device_id', self.device_id, domain='.jlc.com')
+
         self.captchaTicket = None
         self.StaticPath = None
         self.CertifyId = None
@@ -36,7 +49,7 @@ class AliV3:
         self.username = None
         self.password = None
 
-        # 通用 Headers
+        # 更新 Session 的 headers
         self.headers = {
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -46,21 +59,20 @@ class AliV3:
             'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Microsoft Edge";v="122"',
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': '"Windows"',
+            # 注入客户端 UUID
+            'x-jlc-clientuuid': self.client_uuid
         }
-        
-        # 更新 Session 的 headers
         self.session.headers.update(self.headers)
 
-    # --- 新增：初始化会话，获取新鲜的 Cookies ---
     def Init_Session(self):
-        print("正在初始化会话，获取最新 Cookies...")
-        url = "https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F"
+        print("正在初始化会话，获取基础 Cookies...")
+        # 访问一个简单的页面获取 acw_tc 等基础 cookie
+        url = "https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC"
         try:
-            # 访问登录页，服务器会返回 Set-Cookie (包含最新的 HWWAFSESTIME 等)
-            self.session.get(url, verify=False) # 忽略证书错误防止报错
-            print("Cookies 获取成功:", self.session.cookies.get_dict())
+            self.session.get(url, verify=False, timeout=10)
+            # print("Cookies 更新:", self.session.cookies.get_dict())
         except Exception as e:
-            print(f"初始化 Cookies 失败: {e}")
+            print(f"初始化 Cookies 警告 (不影响继续): {e}")
 
     def get_sign(self, params, key):
         with open('sign.js', 'r', encoding='utf-8') as f:
@@ -80,7 +92,7 @@ class AliV3:
             'SignatureMethod': 'HMAC-SHA1',
             'SignatureVersion': '1.0',
             'Format': 'JSON',
-            'Timestamp': '2025-12-15T13:30:27Z', # 注意：这里的时间戳可能也会过期，建议动态生成
+            'Timestamp': '2025-12-15T13:30:27Z',
             'Version': '2023-03-05',
             'Action': 'InitCaptchaV3',
             'SceneId': '6mw4mrmg',
@@ -92,7 +104,8 @@ class AliV3:
         data['DeviceData'] = DeviceData
         data = self.get_sign(data, self.sign_key1)
 
-        # 阿里云的请求不通过 JLC 的 session，单独发
+        # 阿里云请求不需要带 JLC 的 cookies，这里用裸 requests 发送或者新建 session 也可以
+        # 但为了简单，直接用 requests，反正不共享 cookie 给 jlc 也没事
         response = requests.post('https://1tbpug.captcha-open.aliyuncs.com/', headers=self.headers, data=data, proxies=proxy)
 
         # print(response.text)
@@ -129,7 +142,6 @@ class AliV3:
 
         result = subprocess.run(["node", filepath], capture_output=True, text=True).stdout
         self.Dynamic_Key = result.replace('\n', '')
-        # print("Dynamic_Key acquired")
 
     def GetLog2(self):
         data = {
@@ -153,7 +165,6 @@ class AliV3:
             env_data = json.load(f)
 
         data = ctx.call('getLog2Data', data, self.Dynamic_Key, self.Real_Config, env_data)
-        # 阿里云请求独立发送
         requests.post('https://cloudauth-device-dualstack.cn-shanghai.aliyuncs.com/', headers=self.headers, data=data, proxies=proxy)
 
     def GetLog3(self):
@@ -197,15 +208,12 @@ class AliV3:
         _data = self.getData(args)
         deviceToekn = self.GetDeviceData()
 
-        # 修改 headers，去除写死的 cookie
-        headers = {
-            'accept': 'application/json, text/plain, */*',
+        # 这里的 Headers 使用 session 默认的即可，只需补充特有的
+        # 注意：secretkey 依然保留硬编码，如果还报错可能需要更新它
+        headers_override = {
             'content-type': 'application/json',
-            'origin': 'https://passport.jlc.com',
             'referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
-            # secretkey 可能需要动态获取，这里先保留，如果报错需要更新
             'secretkey': '35616236663038352d643366382d343131662d396239622d366439643132653639373764',
-            'x-jlc-clientuuid': '445de653-7a24-4242-88dd-0878479726aa-1766237894098',
         }
 
         captcha_verify_param = {
@@ -223,15 +231,14 @@ class AliV3:
             'aliyunSceneId': '6mw4mrmg',
         }
 
-        # 使用 session 发送请求，会自动带上 Init_Session 获取到的 Cookies
+        # 使用 session 发送，确保带上 device_id 和 acw_tc
         response = self.session.post(
             'https://passport.jlc.com/api/cas/captcha/v2/check-ali-captcha',
-            headers=headers,
+            headers=headers_override,
             json=json_data
         )
 
         print("验证码检查状态:", response.status_code)
-        # print(response.text)
         
         try:
             self.captchaTicket = response.json()['data']['captchaTicket']
@@ -244,19 +251,12 @@ class AliV3:
             print("无法登录: 未获取到 captchaTicket")
             return
 
-        # Headers 清理，去除写死的 cookie 和可能过期的 jsec-x-df
-        headers = {
-            'accept': 'application/json, text/plain, */*',
+        headers_override = {
             'content-type': 'application/json',
-            'origin': 'https://passport.jlc.com',
             'referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
-            # 'jsec-x-df': '...', # 这个指纹如果过期也会导致风控，建议先注释掉，如果报错再想办法生成
             'secretkey': '35616236663038352d643366382d343131662d396239622d366439643132653639373764',
-            'x-jlc-clientuuid': '445de653-7a24-4242-88dd-0878479726aa-1766237894098',
         }
-        
-        # 将 headers 更新到 session headers 中（或者直接传参）
-        # 这里使用 session 发送，确保和 Sumbit_All 使用的是同一个会话环境
+
         json_data = {
             'username': username,
             'password': password,
@@ -267,7 +267,7 @@ class AliV3:
         print("正在尝试登录接口...")
         response = self.session.post(
             'https://passport.jlc.com/api/cas/login/with-password', 
-            headers=headers, 
+            headers=headers_override, 
             json=json_data
         )
 
@@ -277,19 +277,20 @@ class AliV3:
         self.username = username
         self.password = password
 
-        # 1. 这一步最关键：初始化会话
+        # 1. 初始化，生成 device_id 并注入
         self.Init_Session()
 
-        # 2. 正常流程
+        # 2. 阿里云流程
         self.Req_Init()
         self.decrypt_DeviceConfig()
         self.GetDynamic_Key()
         self.GetLog2()
         self.GetLog3()
         
+        # 3. 提交给嘉立创验证
         self.Sumbit_All()
         
-        # 3. 登录
+        # 4. 登录
         enc_username = pwdEncrypt(username)
         enc_password = pwdEncrypt(password)
         self.Login(enc_username, enc_password)
@@ -297,12 +298,9 @@ class AliV3:
 
 if __name__ == '__main__':
     ali = AliV3()
-    # 填入测试账号密码
     if len(sys.argv) >= 3:
         user_arg = sys.argv[1]
         pass_arg = sys.argv[2]
         ali.main(user_arg, pass_arg)
     else:
-        # 你可以在这里填默认测试账号
         print("请提供账号密码")
-        # ali.main("138xxxx", "password") 
