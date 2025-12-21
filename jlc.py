@@ -35,7 +35,7 @@ max_import_retries = 5
 for attempt in range(max_import_retries):
     try:
         from AliV3 import AliV3
-        print("✅ 成功加载 AliV3 登录依赖")
+        # print("✅ 成功加载 AliV3 登录依赖") # 减少日志干扰
         break
     except ImportError:
         print("❌ 错误: 未找到 登录依赖(AliV3.py) 文件，请确保同目录下存在该文件")
@@ -612,27 +612,30 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
     }
 
     try:
-        # 1. 登录流程
-        log(f"账号 {account_index} - 正在打开嘉立创登录页面...")
-        
-        # 确保 AliV3 已加载
+        # 1. 登录流程 - 确保 AliV3 已加载
         if AliV3 is None:
              log(f"账号 {account_index} - ❌ 登录依赖未正确加载，无法登录")
              result['oshwhub_status'] = '依赖缺失'
              return result
 
-        # 1. 打开登录页面以初始化 JS 环境
+        # A. 打开登录页面
+        log(f"账号 {account_index} - 正在打开登录页面...")
         login_page_url = "https://passport.jlc.com/login?appId=JLC_OSHWHUB&redirectUrl=https%3A%2F%2Foshwhub.com%2Fsign_in&backCode=1"
         driver.get(login_page_url)
         
-        # 等待页面 JS 加载 (SM2Utils)
+        # 等待页面加载完成 (等待 SM2Utils 加载)
         try:
-             WebDriverWait(driver, 15).until(lambda d: d.execute_script("return typeof SM2Utils !== 'undefined'"))
-        except:
-             log(f"账号 {account_index} - ⚠ 页面 JS 加载超时，可能影响加密")
+             WebDriverWait(driver, 20).until(
+                lambda d: d.execute_script("return typeof SM2Utils !== 'undefined'")
+            )
+             log(f"账号 {account_index} - 登录页面加载完成")
+        except Exception as e:
+            log(f"账号 {account_index} - ⚠ 页面加载超时或 SM2Utils 未加载: {e}")
+            result['oshwhub_status'] = '页面加载异常'
+            return result
 
-        # 2. 调用 AliV3 获取 ticket
-        log(f"账号 {account_index} - 正在获取 Captcha Ticket...")
+        # B. 调用 AliV3 获取 captchaTicket
+        log(f"账号 {account_index} - 正在获取验证码票据(AliV3)...")
         captcha_ticket = None
         ali_output = ""
         
@@ -643,9 +646,10 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                 ali.main(username=username, password=password)
             except Exception as e:
                 print(f"Error executing AliV3: {e}")
+        
         ali_output = f.getvalue()
         
-        # 从输出中解析 ticket
+        # 解析 captchaTicket
         lines = ali_output.split('\n')
         for line in lines:
             line = line.strip()
@@ -653,114 +657,109 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
             try:
                 data = json.loads(line)
                 if isinstance(data, dict) and data.get('success'):
-                    inner_data = data.get('data')
-                    if isinstance(inner_data, dict) and 'captchaTicket' in inner_data:
+                    inner_data = data.get('data', {})
+                    if 'captchaTicket' in inner_data:
                         captcha_ticket = inner_data['captchaTicket']
-                        log(f"账号 {account_index} - ✅ 成功获取 Ticket")
+                        log(f"账号 {account_index} - ✅ 成功获取 captchaTicket")
                         break
-            except json.JSONDecodeError:
+            except:
                 continue
-
+        
         if not captcha_ticket:
-            log("❌ 未能获取 Captcha Ticket，AliV3 输出:")
-            log(ali_output)
-            result['oshwhub_status'] = 'Ticket获取失败'
+            log(f"账号 {account_index} - ❌ 无法获取 captchaTicket")
+            log(f"调试信息: {ali_output[:200]}...")
+            result['oshwhub_status'] = '验证码失败'
             return result
 
-        # 3. 使用页面 JS 加密账号密码
-        log(f"账号 {account_index} - 正在加密登录凭据...")
-        pub_key = "043b2759c70dab4718520cad55ac41eea6f8922c1309afb788f7578b3e585b167811023effefc2b9193cd93ae9c9a2a864e5fffbf7517c679f40cbf4c4630aa28c"
+        # C. 使用 Selenium 执行加密和发送请求
+        log(f"账号 {account_index} - 正在执行加密并发送登录请求...")
         
-        enc_script = """
-        var pubKey = arguments[0];
-        var user = arguments[1];
-        var pwd = arguments[2];
-        if(typeof SM2Utils !== 'undefined') {
-            return {
-                u: SM2Utils.encs(pubKey, user),
-                p: SM2Utils.encs(pubKey, pwd)
+        # 注入 JS 代码执行加密和 Fetch 请求
+        # 注意：这里使用 execute_async_script 来处理异步 fetch
+        login_script = """
+        var done = arguments[3]; // 异步回调
+        var user = arguments[0];
+        var pass = arguments[1];
+        var ticket = arguments[2];
+        var pubKey = "043b2759c70dab4718520cad55ac41eea6f8922c1309afb788f7578b3e585b167811023effefc2b9193cd93ae9c9a2a864e5fffbf7517c679f40cbf4c4630aa28c";
+        
+        try {
+            // 1. 加密
+            var encUser = SM2Utils.encs(pubKey, user);
+            var encPass = SM2Utils.encs(pubKey, pass);
+            
+            // 2. 构造请求体
+            var payload = {
+                "username": encUser,
+                "password": encPass,
+                "isAutoLogin": true,
+                "captchaTicket": ticket
             };
-        } else { return null; }
+            
+            // 3. 发送请求
+            fetch('https://passport.jlc.com/api/cas/login/with-password', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/plain, */*'
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => {
+                done(data); // 返回 JSON 数据
+            })
+            .catch(error => {
+                done({success: false, message: 'Fetch Error: ' + error.toString()});
+            });
+            
+        } catch (e) {
+            done({success: false, message: 'Script Error: ' + e.toString()});
+        }
         """
         
-        enc_data = driver.execute_script(enc_script, pub_key, username, password)
+        # 执行脚本，设置超时时间 30 秒
+        driver.set_script_timeout(30)
+        login_response = driver.execute_async_script(login_script, username, password, captcha_ticket)
         
-        if not enc_data:
-            log(f"账号 {account_index} - ❌ 加密失败，SM2Utils 未加载")
-            result['oshwhub_status'] = '加密失败'
-            return result
-
-        # 4. 组装请求并发送
-        log(f"账号 {account_index} - 正在发送登录请求...")
-        
-        # 复制 Selenium Cookies 到 Requests
-        session = requests.Session()
-        selenium_cookies = driver.get_cookies()
-        for cookie in selenium_cookies:
-            session.cookies.set(cookie['name'], cookie['value'])
+        # D. 处理登录结果
+        if login_response and login_response.get('success'):
+            data_field = login_response.get('data', {})
+            auth_code = data_field.get('authCode')
             
-        req_headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': driver.execute_script("return navigator.userAgent;"),
-            'Origin': 'https://passport.jlc.com',
-            'Referer': login_page_url,
-            'Accept': 'application/json, text/plain, */*'
-        }
-        
-        payload = {
-            "username": enc_data['u'],
-            "password": enc_data['p'],
-            "isAutoLogin": True,
-            "captchaTicket": captcha_ticket
-        }
-        
-        api_url = 'https://passport.jlc.com/api/cas/login/with-password'
-        
-        try:
-            resp = session.post(api_url, json=payload, headers=req_headers)
-            resp_json = resp.json()
-        except Exception as e:
-            log(f"账号 {account_index} - ❌ 登录请求异常: {e}")
-            result['oshwhub_status'] = '请求异常'
-            return result
-
-        # 5. 处理响应
-        auth_code = None
-        
-        if resp_json.get('success'):
-            inner_data = resp_json.get('data', {})
-            if 'authCode' in inner_data:
-                auth_code = inner_data['authCode']
+            if auth_code:
                 log(f"账号 {account_index} - ✅ 登录接口请求成功，获取到 authCode")
-        elif resp_json.get('code') == 10208:
-            msg = resp_json.get('message', '账号或密码不正确')
-            log(f"账号 {account_index} - ❌ 账号或密码错误: {msg}")
-            result['password_error'] = True
-            result['oshwhub_status'] = '密码错误'
-            return result
+                
+                # 跳转到 sign_in 页面
+                target_url = f"https://oshwhub.com/sign_in?code={auth_code}"
+                driver.get(target_url)
+                
+                # 等待登录成功
+                try:
+                    WebDriverWait(driver, 20).until(
+                        lambda d: "oshwhub.com" in d.current_url and "code=" not in d.current_url
+                    )
+                    log(f"账号 {account_index} - ✅ 登录跳转成功")
+                except:
+                    log(f"账号 {account_index} - ⚠ 登录跳转后页面加载超时，尝试继续...")
+            else:
+                 log(f"账号 {account_index} - ❌ 登录成功但未返回 authCode: {login_response}")
+                 result['oshwhub_status'] = '无AuthCode'
+                 return result
         else:
-            log(f"账号 {account_index} - ❌ 登录失败: {resp_json}")
-            result['oshwhub_status'] = '登录API失败'
-            return result
-
-        if auth_code:
-            # 拼接 URL 并跳转
-            final_login_url = f"https://oshwhub.com/sign_in?code={auth_code}"
-            log(f"账号 {account_index} - 正在跳转登录...")
-            driver.get(final_login_url)
+            # 检查错误码
+            code = login_response.get('code')
+            msg = login_response.get('message', '未知错误')
             
-            # 等待登录成功
-            try:
-                WebDriverWait(driver, 20).until(
-                    lambda d: "oshwhub.com" in d.current_url and "code=" not in d.current_url
-                )
-                log(f"账号 {account_index} - ✅ 登录跳转成功")
-            except Exception:
-                log(f"账号 {account_index} - ⚠ 登录跳转超时或未检测到预期URL，尝试继续后续流程...")
-        else:
-             log(f"账号 {account_index} - ❌ 未获取到 authCode")
-             result['oshwhub_status'] = '无AuthCode'
-             return result
+            if code == 10208 or "账号 or 密码不正确" in msg:
+                log(f"账号 {account_index} - ❌ 检测到账号或密码错误，跳过此账号 ({msg})")
+                result['password_error'] = True
+                result['oshwhub_status'] = '密码错误'
+                return result
+            else:
+                log(f"账号 {account_index} - ❌ 登录接口返回失败: {msg} (Code: {code})")
+                result['oshwhub_status'] = '接口报错'
+                return result
 
         # 3. 获取用户昵称
         time.sleep(2) # 稍作等待确保 Cookie 生效
