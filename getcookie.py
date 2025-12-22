@@ -44,7 +44,7 @@ BASE_HEADERS = {
 
 def load_js_context():
     """加载并编译 JS 环境，补充浏览器环境缺失的变量"""
-    js_path = 'sm2.js'
+    js_path = 'sm2 (2).js'
     if not os.path.exists(js_path):
         raise FileNotFoundError(f"请确保 {js_path} 文件在当前目录下")
         
