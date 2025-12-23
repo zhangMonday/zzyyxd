@@ -9,23 +9,6 @@ import json
 JS_FILE_NAME = 'sm2.js'
 GLOBAL_PUBLIC_KEY = "043b2759c70dab4718520cad55ac41eea6f8922c1309afb788f7578b3e585b167811023effefc2b9193cd93ae9c9a2a864e5fffbf7517c679f40cbf4c4630aa28c"
 
-# 模拟的静态 Cookie (用于填充那些 JS 生成的统计 Cookie，让伪装更像浏览器)
-def generate_fake_analytics_cookies():
-    now = int(time.time())
-    # 模拟百度统计 ID
-    hm_lvt = f"{now},{now+10},{now+50},{now+100}" 
-    # 模拟 Qs_lvt (最后访问时间)
-    qs_lvt = f"{now}"
-    return {
-        'device_id': str(uuid.uuid4()).replace('-', ''),
-        'Qs_lvt_290854': qs_lvt,
-        'Qs_pv_290854': '2499244294467079700%2C852781256760664000', # 模拟 PV 统计
-        '__sameSiteCheck__': '1',
-        '_c_WBKFRo': '03ctatXDH7wXL1GIRpFWI9AUfuGhSVMzyOf5q8oX', # 这是一个指纹相关的，通常固定或很长
-        '_nb_ioWEgULi': '',
-        'Hm_lvt_bdc175618582350273cc82e8dd494d69': hm_lvt
-    }
-
 def get_jsec_signature(client_uuid):
     """加载 JS 并计算 jsec-x-df"""
     try:
@@ -50,17 +33,18 @@ def get_jsec_signature(client_uuid):
 def main():
     session = requests.Session()
     
-    # 1. 准备基础 Headers (模拟浏览器)
+    # 1. 准备基础 Headers (修正为统一的 Windows 环境特征)
     base_headers = {
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-        'content-type': 'application/json',
-        'origin': 'https://passport.jlc.com',
-        'referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-        'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Content-Type': 'application/json;charset=UTF-8',
+        'Origin': 'https://passport.jlc.com',
+        'Referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'sec-ch-ua': '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
         'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Linux"'
+        'sec-ch-ua-platform': '"Windows"',  # 必须与 User-Agent 对应的系统一致
+        'X-Requested-With': 'XMLHttpRequest'
     }
     
     # 2. 生成 Client UUID
@@ -68,24 +52,24 @@ def main():
     client_uuid = f"{uuid.uuid4()}-{timestamp}"
     
     # 3. 发送握手请求 (获取 secretkey 和 HWWAF Cookies)
-    #    这里不需要带复杂的 cookies，服务器会下发新的
     try:
         url = 'https://passport.jlc.com/api/cas-auth/secret/update'
-        # 加上 fake cookies 让请求看起来更正常
-        fake_cookies = generate_fake_analytics_cookies()
-        session.cookies.update(fake_cookies)
         
-        resp = session.post(url, headers=base_headers, json={}, timeout=10)
+        # 注意：不要在第一次请求时手动注入 fake_cookies，这可能导致服务端解析错误或指纹冲突。
+        # 让 requests 自动处理服务器返回的 Set-Cookie。
+        
+        resp = session.post(url, headers=base_headers, json={}, timeout=15)
         
         if resp.status_code != 200:
             print(f"请求失败: {resp.status_code}")
+            print(f"响应内容: {resp.text}") # 打印详细错误信息
             return
 
         resp_json = resp.json()
         secret_key = resp_json.get('data', {}).get('keyId')
         
         if not secret_key:
-            print("未能获取 secretkey")
+            print(f"未能获取 secretkey, 响应数据: {resp_json}")
             return
 
     except Exception as e:
@@ -101,10 +85,9 @@ def main():
     final_headers['secretkey'] = secret_key
     final_headers['x-jlc-clientuuid'] = client_uuid
     final_headers['jsec-x-df'] = jsec_val
-    # 这是一个固定的环境信息Base64，通常不校验内容，照抄即可
     final_headers['x-jlc-clientinfo'] = 'eyJjbGllbnRUeXBlIjoiUEMtV0VCIn0=' 
 
-    # 6. 提取最终 Cookies (Requests Session 自动合并了服务器返回的 HWWAF Cookie 和我们自己造的统计 Cookie)
+    # 6. 提取最终 Cookies
     final_cookies = session.cookies.get_dict()
 
     # ================= 严格格式化输出 =================
