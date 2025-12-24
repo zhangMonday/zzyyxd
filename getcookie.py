@@ -1,186 +1,163 @@
-import requests
-import execjs
+import json
 import time
 import uuid
-import json
-import os
-import base64
-import random
-import string
+import sys
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import WebDriverException
 
-# ================= 配置 =================
-# SM2 公钥
+# ================= 配置区域 =================
+# 全局固定公钥 (用于加密 jsec-x-df)
 GLOBAL_PUBLIC_KEY = "043b2759c70dab4718520cad55ac41eea6f8922c1309afb788f7578b3e585b167811023effefc2b9193cd93ae9c9a2a864e5fffbf7517c679f40cbf4c4630aa28c"
 
-# 你的登录账号密码
-USERNAME = "13800138000"
-PASSWORD = "YourPassword123"
+# 目标登录页面 (访问此页面会自动触发握手和WAF Cookie下发)
+TARGET_URL = "https://passport.jlc.com/login?appId=JLC_PORTAL_PC"
 
-# 本地文件名
-FILE_CRYPTO = 'crypto-js.min.js'
-FILE_SM2 = 'sm2(2).js'
+def log(msg):
+    """格式化日志输出"""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
-def get_js_ctx():
-    """加载 JS 环境"""
+def init_driver():
+    """初始化 Selenium WebDriver (无头模式 + 防检测)"""
+    log("正在启动 Chrome 浏览器 (无头模式)...")
+    chrome_options = Options()
     
-    # 1. 读取文件内容
-    if not os.path.exists(FILE_CRYPTO) or not os.path.exists(FILE_SM2):
-        print(f"[!] 错误: 找不到 {FILE_CRYPTO} 或 {FILE_SM2}，请确保文件在当前目录下。")
-        exit(1)
-
-    with open(FILE_CRYPTO, 'r', encoding='utf-8') as f:
-        crypto_js_code = f.read()
+    # 基础无头配置
+    chrome_options.add_argument("--headless=new")  # 新版无头模式，更像真实浏览器
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
     
-    with open(FILE_SM2, 'r', encoding='utf-8') as f:
-        sm2_code = f.read()
-
-    # 2. 构建浏览器环境 Polyfill
-    # 关键点：将 exports/module 设为 undefined，强制 crypto-js 将对象挂载到 this/window 上
-    shim = """
-        var window = this;
-        var navigator = { 
-            appName: 'Netscape', 
-            appVersion: '5.0', 
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 
-        };
-        var document = { createElement: function() { return { getContext: function() {} } } };
-        
-        // 屏蔽 CommonJS 导出，强制浏览器模式
-        var exports = undefined;
-        var module = undefined;
-        var define = undefined;
-    """
+    # 关键：设置 User-Agent (必须与 headers 中的一致)
+    chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
-    # 3. 组合代码
-    # shim -> crypto-js -> 补丁(确保window.CryptoJS存在) -> sm2
-    full_code = f"""
-        {shim}
-        {crypto_js_code}
-        
-        if (!window.CryptoJS && this.CryptoJS) {{
-            window.CryptoJS = this.CryptoJS;
-        }}
-        
-        {sm2_code}
-    """
-    
-    return execjs.compile(full_code)
+    # 屏蔽自动化特征
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
 
-def sm2_encrypt(ctx, data):
-    """调用 JS 的 sm2Encrypt 方法"""
-    # 对应 JS: sm2Encrypt(data, key, mode=1) -> C1C3C2
-    return ctx.call('sm2Encrypt', data, GLOBAL_PUBLIC_KEY, 1)
-
-def generate_client_info():
-    """生成 X-JLC-ClientInfo (Base64 JSON)"""
-    info = {
-        "clientType": "PC-WEB",
-        "osName": "Windows",
-        "osVersion": "10",
-        "browserName": "Chrome",
-        "browserVersion": "120.0.0.0",
-        "browserEngine": "Blink",
-        "screenWidth": 1920,
-        "screenHeight": 1080,
-        "dpr": 1,
-        "deviceType": None,
-        "netType": "4g"
-    }
-    # 使用紧凑格式 dump
-    json_str = json.dumps(info, separators=(',', ':'))
-    return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+    try:
+        driver = webdriver.Chrome(options=chrome_options)
+        # 进一步屏蔽 navigator.webdriver 特征
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => undefined
+            })
+            """
+        })
+        return driver
+    except Exception as e:
+        log(f"启动浏览器失败: {e}")
+        sys.exit(1)
 
 def main():
-    print("[-] 初始化 JS 环境...")
+    driver = init_driver()
+    
     try:
-        ctx = get_js_ctx()
-    except Exception as e:
-        print(f"[!] JS 加载失败: {e}")
-        return
-
-    session = requests.Session()
-    
-    # 1. 准备指纹和 ID
-    # X-JLC-ClientUuid: 格式为 UUID-时间戳
-    client_uuid = f"{uuid.uuid4()}-{int(time.time() * 1000)}"
-    
-    # 模拟一个 32 位的 Visitor ID (通常由指纹库生成)
-    visitor_id = ''.join(random.choices(string.hexdigits.lower(), k=32))
-    
-    # 计算 JSec-X-Df (加密的 visitor_id)
-    jsec_x_df = sm2_encrypt(ctx, visitor_id)
-    
-    # Client Info
-    client_info = generate_client_info()
-
-    # 2. 基础 Headers
-    base_headers = {
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json;charset=UTF-8',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Origin': 'https://passport.jlc.com',
-        'Referer': 'https://passport.jlc.com/login',
-        'X-JLC-ClientUuid': client_uuid,
-        'X-JLC-ClientInfo': client_info,
-        'JSec-X-Df': jsec_x_df
-    }
-
-    # 3. 握手获取 SecretKey
-    print("[-] 正在握手获取 SecretKey...")
-    secret_key = ""
-    try:
-        url = 'https://passport.jlc.com/api/cas-auth/secret/update'
-        # 必须带上这些 Header，否则后端会报 500
-        resp = session.post(url, headers=base_headers, json={}, timeout=10)
+        # 1. 访问登录页，触发 WAF 和 secretKey 更新
+        log(f"正在访问登录页面: {TARGET_URL}")
+        driver.get(TARGET_URL)
         
-        if resp.status_code != 200:
-            print(f"[!] 握手失败: {resp.status_code}")
-            print(f"响应: {resp.text}")
-            return
+        # 等待页面加载和 JS 执行 (握手接口是异步的)
+        log("等待页面加载及后台握手请求 (5秒)...")
+        time.sleep(5) 
 
-        data = resp.json()
-        if data.get('code') == 200:
-            secret_key = data['data']['keyId']
-            print(f"[+] 获取成功 SecretKey: {secret_key}")
+        # 2. 从 LocalStorage 获取 secretKey
+        # 嘉立创前端将 keyId 存储在 localStorage 的 'keyPair' 字段中
+        log("正在提取 LocalStorage 中的密钥...")
+        try:
+            key_pair_str = driver.execute_script("return localStorage.getItem('keyPair');")
+            if not key_pair_str:
+                raise ValueError("LocalStorage 'keyPair' 为空，可能是握手请求被拦截或尚未完成")
+            
+            key_pair = json.loads(key_pair_str)
+            secret_key = key_pair.get('keyId')
+            if not secret_key:
+                raise ValueError("无法从 keyPair 中找到 keyId")
+                
+            log(f"成功获取 SecretKey: {secret_key[:10]}...")
+            
+        except Exception as e:
+            log(f"获取 SecretKey 失败: {e}")
+            log("尝试通过 document.cookie 和 页面状态排查...")
+            driver.quit()
+            sys.exit(1)
+
+        # 3. 构造 Client UUID
+        timestamp = int(time.time() * 1000)
+        client_uuid = f"{uuid.uuid4()}-{timestamp}"
+        log(f"生成的 ClientUUID: {client_uuid}")
+
+        # 4. 调用浏览器内部函数进行 SM2 加密
+        # 直接使用页面上的 SM2Utils.encs 函数
+        log("正在调用浏览器控制台 SM2Utils 进行加密...")
+        try:
+            # 这里的 1 代表 cipherMode C1C3C2，与你 JS 文件中一致
+            js_code = f"return window.SM2Utils.encs('{GLOBAL_PUBLIC_KEY}', '{client_uuid}', 1);"
+            jsec_x_df = driver.execute_script(js_code)
+            
+            if not jsec_x_df:
+                raise ValueError("加密函数返回为空")
+            
+            log("加密成功，已生成 jsec-x-df 签名")
+            
+        except WebDriverException as e:
+            log(f"调用 JS 加密失败: {e.msg}")
+            log("可能原因: SM2Utils 对象未挂载到 window，页面可能加载不完全")
+            driver.quit()
+            sys.exit(1)
+
+        # 5. 提取 Cookies
+        log("正在提取浏览器 Cookies...")
+        selenium_cookies = driver.get_cookies()
+        final_cookies = {}
+        
+        # 将 Selenium cookie 列表转换为字典
+        for cookie in selenium_cookies:
+            final_cookies[cookie['name']] = cookie['value']
+
+        # 确保 HWWAFSESID 存在 (如果没有，可能被风控)
+        if 'HWWAFSESID' in final_cookies:
+            log("检测到 HWWAF 防火墙 Cookie，提取成功")
         else:
-            print(f"[!] API 错误: {data.get('message')}")
-            return
+            log("警告: 未检测到 HWWAFSESID，可能需要更换 IP 或稍后重试")
+
+        # 6. 获取 User-Agent
+        user_agent = driver.execute_script("return navigator.userAgent;")
+
+        # ================== 输出结果 ==================
+        print("\n" + "="*60)
+        print("以下内容可直接复制到 with-password 请求代码中")
+        print("="*60 + "\n")
+
+        print("        cookies = {")
+        for k, v in final_cookies.items():
+            print(f"            '{k}': '{v}',")
+        print("        }")
+        
+        print("\n        headers = {")
+        print(f"            'accept': 'application/json, text/plain, */*',")
+        print(f"            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',")
+        print(f"            'cache-control': 'no-cache, no-store, must-revalidate',")
+        print(f"            'content-type': 'application/json',")
+        print(f"            'origin': 'https://passport.jlc.com',")
+        print(f"            'referer': '{TARGET_URL}',")
+        print(f"            'user-agent': '{user_agent}',")
+        print(f"            'secretkey': '{secret_key}',")
+        print(f"            'x-jlc-clientuuid': '{client_uuid}',")
+        # jsec-x-df 是加密后的 uuid
+        print(f"            'jsec-x-df': '{jsec_x_df}',")
+        # x-jlc-clientinfo 是固定的 Base64 (PC-WEB)，这里用 Selenium 里的值或者硬编码
+        print(f"            'x-jlc-clientinfo': 'eyJjbGllbnRUeXBlIjoiUEMtV0VCIn0=',") 
+        print("        }")
 
     except Exception as e:
-        print(f"[!] 请求异常: {e}")
-        return
+        log(f"发生未预期的错误: {e}")
+    finally:
+        log("关闭浏览器...")
+        driver.quit()
 
-    # 4. 加密账号密码
-    print("[-] 正在加密账号密码...")
-    enc_username = sm2_encrypt(ctx, USERNAME)
-    enc_password = sm2_encrypt(ctx, PASSWORD)
-
-    # 5. 组装最终登录请求数据
-    login_headers = base_headers.copy()
-    login_headers['secretkey'] = secret_key
-    
-    login_payload = {
-        "username": enc_username,
-        "password": enc_password,
-        "isAutoLogin": False,
-        "appId": "JLC_PORTAL_PC"
-    }
-
-    # 6. 输出结果
-    print("\n" + "="*40)
-    print(" >>> 登录请求配置生成完毕 <<< ")
-    print("="*40)
-    
-    print(f"\n请求 URL: https://passport.jlc.com/api/cas/login/with-password")
-    
-    print("\n[Headers]:")
-    print(json.dumps(login_headers, indent=4, ensure_ascii=False))
-    
-    print("\n[Cookies] (Session由握手接口返回):")
-    print(json.dumps(session.cookies.get_dict(), indent=4))
-    
-    print("\n[Payload (JSON Body)]:")
-    print(json.dumps(login_payload, indent=4))
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
