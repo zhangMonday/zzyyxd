@@ -32,4 +32,4 @@ jobs:
 
       - name: '原版aliv3'
         run: |
-          python ./AliV3.py
+          python ./AliV3old.py
