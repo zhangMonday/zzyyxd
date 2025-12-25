@@ -4,7 +4,7 @@ import random
 import subprocess
 import time
 import sys
-import textwrap
+import textwrap  # 新增引用，用于处理缩进
 from functools import partial
 
 subprocess.Popen = partial(subprocess.Popen, encoding='utf-8', errors='ignore')
@@ -14,7 +14,23 @@ import execjs
 
 from Utils import MatchArgs, pwdEncrypt
 
+# ==============================================================================
+# 修复：注释掉导致报错的代理获取代码
+# 原代码在 import 时会请求 51daili.com 导致 ConnectionResetError
+# ==============================================================================
+# prox = requests.get(
+#     'http://bapi.51daili.com/getapi2?linePoolIndex=-1&packid=2&time=2&qty=1&port=1&format=txt&usertype=17&uid=55442').text
+#
+# print(prox)
+
+# prox = ''
+
+# proxy = {
+#     "https": "http://" + prox,
+#     "http": "http://" + prox,
+# }
 proxy = None
+# ==============================================================================
 
 
 class AliV3:
@@ -212,7 +228,8 @@ class AliV3:
         print('deviceToekn', deviceToekn)
         print('_data', _data)
 
-        # 使用原程序中的固定 cookies 和 headers
+        import requests
+
         cookies = {
             'device_id': 'c7d0a5f4b554477fae0e1ba29f84fb63',
             'HWWAFSESID': 'bcd7d8b4f625fb57ac',
@@ -266,14 +283,23 @@ class AliV3:
         except Exception as e:
             print("Failed to get captchaTicket:", e)
 
-    def get_dynamic_cookies_and_headers(self):
-        """从 getcookie.py 动态获取 cookies 和 headers"""
+    def Login(self, username, password):
+        if not self.captchaTicket:
+            print("Skipping login: No captchaTicket acquired.")
+            return
+
+        import requests
+
+        # ======================================================================
+        # 修改：动态调用 getcookie.py 获取 cookies 和 headers
+        # ======================================================================
         cookies = {}
         headers = {}
         
         try:
             print("正在调用 getcookie.py 获取动态 Cookies 和 Headers...")
             # 调用同目录下的 getcookie.py
+            # 使用 sys.executable 确保使用相同的 Python 解释器
             process = subprocess.Popen(
                 [sys.executable, 'getcookie.py'], 
                 stdout=subprocess.PIPE, 
@@ -282,7 +308,7 @@ class AliV3:
             stdout, stderr = process.communicate()
             
             if process.returncode == 0:
-                output_str = stdout.decode('utf-8')
+                output_str = stdout.decode('utf-8')  # 确保解码
                 # 定位到 cookies = { 的位置，假设这是有效代码块的开始
                 start_marker = "cookies = {"
                 start_index = output_str.find(start_marker)
@@ -292,6 +318,7 @@ class AliV3:
                     code_block = output_str[start_index:]
                     
                     # 处理缩进问题 (getcookie.py 输出带有缩进)
+                    # 使用 textwrap.dedent 去除公共缩进，确保 exec 能正确解析
                     dedented_code = textwrap.dedent(code_block)
                     
                     # 在局部作用域中执行提取的代码
@@ -313,24 +340,14 @@ class AliV3:
                 else:
                     print("错误：在 getcookie.py 输出中未找到 'cookies = {' 标记。")
             else:
-                print(f"getcookie.py 执行失败: {stderr}")
+                print(f"getcookie.py 执行失败: {stderr.decode('utf-8')}")
         
         except Exception as e:
             print(f"动态获取 Cookies/Headers 发生异常: {e}")
-        
-        return cookies, headers
 
-    def Login(self, username, password):
-        if not self.captchaTicket:
-            print("Skipping login: No captchaTicket acquired.")
-            return
-
-        # 动态获取 cookies 和 headers
-        cookies, headers = self.get_dynamic_cookies_and_headers()
-        
-        # 如果获取失败，使用默认值
+        # 如果获取失败，使用默认的硬编码值作为 fallback
         if not cookies or not headers:
-            print("警告：动态获取 Cookies/Headers 失败，使用默认值。")
+            print("警告：Cookies 或 Headers 为空，使用默认值。")
             cookies = {
                 'JSESSIONID': '',
                 'device_id': 'c7d0a5f4b554477fae0e1ba29f84fb63',
@@ -367,6 +384,9 @@ class AliV3:
                 'x-jlc-clientinfo': 'eyJjbGllbnRUeXBlIjoiUEMtV0VCIiwib3NOYW1lIjoiV2luZG93cyIsIm9zVmVyc2lvbiI6IjEwIiwiYnJvd3Nlck5hbWUiOiJFZGdlIiwiYnJvd3NlclZlcnNpb24iOiIxNDMuMC4wLjAiLCJicm93c2VyRW5naW5lIjoiQmxpbmsiLCJicm93c2VyRW5naW5lVmVyc2lvbiI6IjE0My4wLjAuMCIsInNjcmVlbldpZHRoIjoxNzA3LCJzY3JlZW5IZWlnaHQiOjEwNjcsImRwciI6MS41LCJjb2xvckRlcHRoIjoyNCwicGl4ZWxEZXB0aCI6MjQsImdwdVZlbmRvciI6Ikdvb2dsZSBJbmMuIChOVklESUEpIiwiZ3B1UmVuZGVyZXIiOiJBTkdMRSAoTlZJRElBLCBOVklESUEgR2VGb3JjZSBSVFggNTA2MCBMYXB0b3AgR1BVICgweDAwMDAyRDU5KSBEaXJlY3QzRDExIHZzXzVfMCBwc181XzAsIEQzRDExKSIsImNwdUFyY2hpdGVjdHVyZSI6ImFtZDY0IiwiaGFyZHdhcmVDb25jdXJyZW5jeSI6MjQsImxhbmd1YWdlIjoiemgtQ04iLCJ0aW1lWm9uZSI6IkFzaWEvU2hhbmdoYWkiLCJ0aW1lem9uZU9mZnNldCI6LTQ4MCwibmV0VHlwZSI6IjRnIn0=',
                 'x-jlc-clientuuid': '445de653-7a24-4242-88dd-0878479726aa-1766237894098',
             }
+        # ======================================================================
+        # 修改结束
+        # ======================================================================
 
         json_data = {
             'username': username,
