@@ -231,28 +231,51 @@ class AliV3:
 
         import requests
 
-        cookies = {
-            'device_id': 'c7d0a5f4b554477fae0e1ba29f84fb63',
-            'HWWAFSESID': 'bcd7d8b4f625fb57ac',
-            'HWWAFSESTIME': '1766299533105',
-            'Qs_lvt_290854': '1766237893%2C1766299553',
-            'Qs_pv_290854': '2499244294467079700%2C852781256760664000',
-            '__sameSiteCheck__': '1',
-            '_c_WBKFRo': '03ctatXDH7wXL1GIRpFWI9AUfuGhSVMzyOf5q8oX',
-            '_nb_ioWEgULi': '',
-        }
+ cookies = {
+    'JSESSIONID': '',
+    'AGL_USER_ID': '87ba0775-1be1-44f1-9e39-dc7b2d51e1d1',
+    'acw_tc': '0ae5a7e017666808306043912ee4530e7b76c9a082a46f807ac310b7471739',
+    'Hm_lvt_e2986f4b6753d376004696a1628713d2': '1766596836,1766673406,1766679921,1766680055',
+    'Qs_lvt_290854': '1766680832',
+    '__sameSiteCheck__': '1',
+    'device_id': 'f3ad246f67dd4c2bbfadacba151890f8',
+    'mediav': '%7B%22eid%22%3A%22586266%22%2C%22ep%22%3A%22%22%2C%22vid%22%3A%22%22%2C%22ctn%22%3A%22%22%2C%22vvid%22%3A%22%22%2C%22_mvnf%22%3A1%2C%22_mvctn%22%3A0%2C%22_mvck%22%3A1%2C%22_refnf%22%3A1%7D',
+    'Hm_lvt_2c39bff195277b6ae5c091fa1a0539c9': '1766597985,1766673834,1766680810,1766680859',
+    'HMACCOUNT': '5C0A50FD0F0FF06D',
+    'Hm_lvt_fd32df1c0976b3b5c48e7972938e570a': '1766597985,1766673834,1766680810,1766680859',
+    'Hm_lpvt_fd32df1c0976b3b5c48e7972938e570a': '1766680889',
+    'Hm_lpvt_2c39bff195277b6ae5c091fa1a0539c9': '1766680889',
+    'Hm_lpvt_e2986f4b6753d376004696a1628713d2': '1766680984',
+    'Qs_pv_290854': '3642147226830568400%2C3099776345320113000%2C1163839156312501500%2C2168839663199811600%2C2658413402970838500',
+    '_c_WBKFRo': 'EezND3oJZC7W3JqCMTUpu3siI7wbtDdCLwF3Ftuc',
+    '_nb_ioWEgULi': '',
+    'lsId': '018f1ea183a7449fa4e75ec02c145d40',
+}
 
-        headers = {
-            'accept': 'application/json, text/plain, */*',
-            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-            'cache-control': 'no-cache, no-store, must-revalidate',
-            'content-type': 'application/json',
-            'origin': 'https://passport.jlc.com',
-            'referer': 'https://passport.jlc.com/window/login?appId=JLC_PORTAL_PC&redirectUrl=https%3A%2F%2Fwww.jlc.com%2F',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-            'secretkey': '35616236663038352d643366382d343131662d396239622d366439643132653639373764',
-            'x-jlc-clientuuid': '445de653-7a24-4242-88dd-0878479726aa-1766237894098',
-        }
+headers = {
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'zh-CN',
+    'cache-control': 'no-cache, no-store, must-revalidate',
+    'content-type': 'application/json',
+    # 'cookie': 'JSESSIONID=; AGL_USER_ID=87ba0775-1be1-44f1-9e39-dc7b2d51e1d1; acw_tc=0ae5a7e017666808306043912ee4530e7b76c9a082a46f807ac310b7471739; Hm_lvt_e2986f4b6753d376004696a1628713d2=1766596836,1766673406,1766679921,1766680055; Qs_lvt_290854=1766680832; __sameSiteCheck__=1; device_id=f3ad246f67dd4c2bbfadacba151890f8; mediav=%7B%22eid%22%3A%22586266%22%2C%22ep%22%3A%22%22%2C%22vid%22%3A%22%22%2C%22ctn%22%3A%22%22%2C%22vvid%22%3A%22%22%2C%22_mvnf%22%3A1%2C%22_mvctn%22%3A0%2C%22_mvck%22%3A1%2C%22_refnf%22%3A1%7D; Hm_lvt_2c39bff195277b6ae5c091fa1a0539c9=1766597985,1766673834,1766680810,1766680859; HMACCOUNT=5C0A50FD0F0FF06D; Hm_lvt_fd32df1c0976b3b5c48e7972938e570a=1766597985,1766673834,1766680810,1766680859; Hm_lpvt_fd32df1c0976b3b5c48e7972938e570a=1766680889; Hm_lpvt_2c39bff195277b6ae5c091fa1a0539c9=1766680889; Hm_lpvt_e2986f4b6753d376004696a1628713d2=1766680984; Qs_pv_290854=3642147226830568400%2C3099776345320113000%2C1163839156312501500%2C2168839663199811600%2C2658413402970838500; _c_WBKFRo=EezND3oJZC7W3JqCMTUpu3siI7wbtDdCLwF3Ftuc; _nb_ioWEgULi=; lsId=018f1ea183a7449fa4e75ec02c145d40',
+    'expires': '0',
+    'jsec-x-df': '04b9e7df40d6d227fae8a1c32a2d3bd496a93bf475795a00e417d32da7ae66a331738c49387bbadbf12e7980dbdd59d6a47825ff49686b3a6f5b7fc46c62684df6f3f44472b56421a0bbe4e7b2f9aa6f2bca662595d316f6b64261f2703a4f5a23b939a468f60e79ab690b2fca7f3f0657c6bf334a82297fb319bce5fca17f6835f9b5b0b9aa2e3b724b114a87',
+    'origin': 'https://passport.jlc.com',
+    'pragma': 'no-cache',
+    'priority': 'u=1, i',
+    'referer': 'https://passport.jlc.com/login?appId=JLC_OSHWHUB&redirectUrl=https%3A%2F%2Foshwhub.com%2Fsign_in&backCode=1',
+    'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Linux"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'secretkey': '31323237396563332d653163392d346237642d613939312d653339313634383861333839',
+    'support-cookie-samesite': 'true',
+    'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+    'x-jlc-clientinfo': 'eyJjbGllbnRUeXBlIjoiUEMtV0VCIiwib3NOYW1lIjoiTGludXgiLCJvc1ZlcnNpb24iOiJ4ODZfNjQiLCJicm93c2VyTmFtZSI6IkNocm9tZSIsImJyb3dzZXJWZXJzaW9uIjoiMTI3LjAuMC4wIiwiYnJvd3NlckVuZ2luZSI6IkJsaW5rIiwiYnJvd3NlckVuZ2luZVZlcnNpb24iOiIxMjcuMC4wLjAiLCJzY3JlZW5XaWR0aCI6MzYwLCJzY3JlZW5IZWlnaHQiOjY0MCwiZHByIjoyLjQwMTcwNzY0OTIzMDk1NywiY29sb3JEZXB0aCI6MjQsInBpeGVsRGVwdGgiOjI0LCJncHVWZW5kb3IiOiJHb29nbGUgSW5jLiAoQVJNKSIsImdwdVJlbmRlcmVyIjoiQU5HTEUgKEFSTSwgTWFsaS1HNzEsIE9wZW5HTCBFUyAzLjIpIiwiY3B1QXJjaGl0ZWN0dXJlIjoiYW1kNjQiLCJoYXJkd2FyZUNvbmN1cnJlbmN5Ijo4LCJsYW5ndWFnZSI6InpoLUNOIiwidGltZVpvbmUiOiJBc2lhL1NoYW5naGFpIiwidGltZXpvbmVPZmZzZXQiOi00ODAsIm5ldFR5cGUiOiI0ZyJ9',
+    'x-jlc-clientuuid': '42f83515-8992-4e98-a3e6-f8bfc91f5b84-1752063435643',
+}
 
         # captchaVerifyParam 是一个字典，而不是字符串
         captcha_verify_param = {
