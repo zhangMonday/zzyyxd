@@ -90,8 +90,9 @@ def with_retry(func, max_retries=5, delay=1):
 def wait_for_network_headers(driver, timeout=20):
     """
     等待并从 m.jlc.com 的任意网络请求头中提取 X-JLC-AccessToken 和 secretkey
+    会自动过滤掉 'NONE', 'UNDEFINED' 等无效值
     """
-    log("正在监听网络请求，等待捕获 X-JLC-AccessToken...")
+    log("正在监听网络请求，等待捕获有效的 X-JLC-AccessToken...")
     start_time = time.time()
     
     found_token = None
@@ -117,19 +118,27 @@ def wait_for_network_headers(driver, timeout=20):
                         if 'm.jlc.com' in url:
                             headers = request.get('headers', {})
                             
-                            # 尝试提取 Token (不区分大小写)
-                            # 通常是 x-jlc-accesstoken
                             for key, value in headers.items():
                                 key_lower = key.lower()
-                                if key_lower == 'x-jlc-accesstoken':
-                                    if value and not found_token:
-                                        found_token = value
-                                        log(f"✅ 成功从请求头捕获 Token: {found_token[:20]}...")
                                 
+                                # 提取 Token
+                                if key_lower == 'x-jlc-accesstoken':
+                                    # 过滤逻辑：排除 None/Empty, 排除 "NONE", "UNDEFINED", "NULL"
+                                    if value and isinstance(value, str):
+                                        clean_val = value.strip().upper()
+                                        if clean_val not in ['NONE', 'UNDEFINED', 'NULL', ''] and len(value) > 10:
+                                            if not found_token:
+                                                found_token = value
+                                                log(f"✅ 成功从请求头捕获 Token: {found_token[:20]}...")
+                                
+                                # 提取 SecretKey
                                 if key_lower == 'secretkey':
-                                    if value and not found_secret:
-                                        found_secret = value
-                                        log(f"✅ 成功从请求头捕获 SecretKey: {found_secret[:20]}...")
+                                    if value and isinstance(value, str):
+                                        clean_val = value.strip().upper()
+                                        if clean_val not in ['NONE', 'UNDEFINED', 'NULL', '']:
+                                            if not found_secret:
+                                                found_secret = value
+                                                log(f"✅ 成功从请求头捕获 SecretKey: {found_secret[:20]}...")
 
                 except Exception:
                     continue
@@ -138,8 +147,8 @@ def wait_for_network_headers(driver, timeout=20):
             if found_token and found_secret:
                 return found_token, found_secret
             
-            # 如果只找到了 Token，继续找一会 SecretKey，或者超时返回
-            if found_token and (time.time() - start_time > 5): # 找到Token后最多再等5秒找Secret
+            # 如果只找到了 Token，继续找一会 SecretKey
+            if found_token and (time.time() - start_time > 8): # 找到Token后最多再等8秒找Secret
                  return found_token, found_secret
 
             time.sleep(0.5)
@@ -149,7 +158,7 @@ def wait_for_network_headers(driver, timeout=20):
             time.sleep(1)
             
     if not found_token:
-        log("❌ 等待超时，未能在请求头中抓取到 X-JLC-AccessToken")
+        log("❌ 等待超时，未能在请求头中抓取到有效的 X-JLC-AccessToken")
     
     return found_token, found_secret
 
