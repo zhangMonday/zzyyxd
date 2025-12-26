@@ -88,72 +88,12 @@ def with_retry(func, max_retries=5, delay=1):
     return wrapper
 
 @with_retry
-def extract_token_mixed(driver):
-    """混合提取模式：先查localStorage，再查Cookies"""
-    # 1. 尝试从 localStorage 提取
-    try:
-        token = driver.execute_script("return window.localStorage.getItem('X-JLC-AccessToken');")
-        if token:
-            log(f"✅ 成功从 localStorage 提取 token: {token[:30]}...")
-            return token
-        
-        alternative_keys = ["x-jlc-accesstoken", "accessToken", "token", "jlc-token"]
-        for key in alternative_keys:
-            token = driver.execute_script(f"return window.localStorage.getItem('{key}');")
-            if token:
-                log(f"✅ 从 localStorage 的 {key} 提取到 token: {token[:30]}...")
-                return token
-    except Exception as e:
-        log(f"⚠ localStorage 提取失败: {e}")
-
-    # 2. 尝试从 Cookies 提取
-    try:
-        cookies = driver.get_cookies()
-        for cookie in cookies:
-            if cookie['name'] in ['X-JLC-AccessToken', 'x-jlc-accesstoken', 'accessToken']:
-                token = cookie['value']
-                log(f"✅ 成功从 Cookie 提取 token: {token[:30]}...")
-                return token
-    except Exception as e:
-        log(f"⚠ Cookie 提取失败: {e}")
-    
-    return None
-
-@with_retry
-def extract_token_from_devtools(driver):
-    """使用 DevTools 从网络请求头中提取 token (作为最后手段)"""
+def extract_jlc_headers_from_devtools(driver):
+    """
+    使用 DevTools 从网络请求中提取 X-JLC-AccessToken 和 secretkey
+    一次性提取两个值，避免多次调用 get_log 导致日志被清空
+    """
     token = None
-    try:
-        logs = driver.get_log('performance')
-        for entry in logs:
-            try:
-                message = json.loads(entry['message'])
-                message_type = message.get('message', {}).get('method', '')
-                
-                # 检查请求头或响应头
-                headers = {}
-                if message_type == 'Network.requestWillBeSent':
-                    headers = message.get('message', {}).get('params', {}).get('request', {}).get('headers', {})
-                elif message_type == 'Network.responseReceived':
-                    headers = message.get('message', {}).get('params', {}).get('response', {}).get('requestHeaders', {})
-                
-                # 遍历查找 token
-                t = (headers.get('x-jlc-accesstoken') or 
-                     headers.get('X-JLC-AccessToken') or 
-                     headers.get('X-Jlc-Accesstoken'))
-                
-                if t:
-                    log(f"✅ 从网络请求头中提取到 token: {t[:20]}...")
-                    return t
-            except:
-                continue
-    except Exception as e:
-        log(f"❌ DevTools 提取 token 出错: {e}")
-    return token
-
-@with_retry
-def extract_secretkey_from_devtools(driver):
-    """使用 DevTools 从网络请求中提取 secretkey"""
     secretkey = None
     
     try:
@@ -170,41 +110,38 @@ def extract_secretkey_from_devtools(driver):
                     
                     if 'm.jlc.com' in url:
                         headers = request.get('headers', {})
-                        secretkey = (
-                            headers.get('secretkey') or 
-                            headers.get('SecretKey') or
-                            headers.get('secretKey') or
-                            headers.get('SECRETKEY')
-                        )
                         
-                        if secretkey:
-                            log(f"✅ 从请求中提取到 secretkey: {secretkey[:20]}...")
-                            return secretkey
-                
-                elif message_type == 'Network.responseReceived':
-                    response = message.get('message', {}).get('params', {}).get('response', {})
-                    url = response.get('url', '')
-                    
-                    if 'm.jlc.com' in url:
-                        headers = response.get('requestHeaders', {})
-                        secretkey = (
-                            headers.get('secretkey') or 
-                            headers.get('SecretKey') or
-                            headers.get('secretKey') or
-                            headers.get('SECRETKEY')
-                        )
+                        # 提取 Token (尝试不同的大小写组合)
+                        if not token:
+                            token = (
+                                headers.get('x-jlc-accesstoken') or
+                                headers.get('X-JLC-AccessToken') or
+                                headers.get('X-Jlc-Accesstoken') or
+                                headers.get('token')
+                            )
                         
-                        if secretkey:
-                            log(f"✅ 从响应中提取到 secretkey: {secretkey[:20]}...")
-                            return secretkey
-                            
+                        # 提取 SecretKey
+                        if not secretkey:
+                            secretkey = (
+                                headers.get('secretkey') or 
+                                headers.get('SecretKey') or
+                                headers.get('secretKey') or
+                                headers.get('SECRETKEY')
+                            )
+                        
+                        # 如果两个都找到了，直接返回
+                        if token and secretkey:
+                            log(f"✅ 从请求头中提取到 token: {token[:30]}...")
+                            log(f"✅ 从请求头中提取到 secretkey: {secretkey[:20]}...")
+                            return token, secretkey
             except:
                 continue
                 
     except Exception as e:
-        log(f"❌ DevTools 提取 secretkey 出错: {e}")
+        log(f"❌ DevTools 提取请求头出错: {e}")
     
-    return secretkey
+    # 如果只找到其中一个或都没找到，返回 None 以触发重试
+    return None
 
 def get_oshwhub_points(driver, account_index):
     """获取开源平台积分数量"""
@@ -314,17 +251,14 @@ class JLCClient:
                     self.driver.refresh()
                     WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                     time.sleep(1 + random.uniform(0, 1))
+                    
                     navigate_and_interact_m_jlc(self.driver, self.account_index)
                     
-                    # 重新提取时也尝试多种方式
-                    access_token = extract_token_mixed(self.driver)
-                    if not access_token:
-                        access_token = extract_token_from_devtools(self.driver)
-                        
-                    secretkey = extract_secretkey_from_devtools(self.driver)
-                    if access_token:
+                    # 使用新的提取方法
+                    headers_result = extract_jlc_headers_from_devtools(self.driver)
+                    if headers_result:
+                        access_token, secretkey = headers_result
                         self.headers['x-jlc-accesstoken'] = access_token
-                    if secretkey:
                         self.headers['secretkey'] = secretkey
                 except:
                     pass  # 静默继续
@@ -459,35 +393,17 @@ class JLCClient:
         return True
 
 def navigate_and_interact_m_jlc(driver, account_index):
-    """在 m.jlc.com 进行导航和交互以触发网络请求"""
-    log(f"账号 {account_index} - 在 m.jlc.com 进行交互操作...")
+    """在 m.jlc.com 进行导航以触发网络请求"""
+    log(f"账号 {account_index} - 在 m.jlc.com 进行交互操作以触发网络请求...")
     
     try:
         WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        
+        # 简单滚动页面，通常这足以触发后台的 API 请求
         driver.execute_script("window.scrollTo(0, 300);")
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        time.sleep(1)
+        driver.execute_script("window.scrollTo(0, 600);")
         
-        nav_selectors = [
-            "//div[contains(text(), '我的')]",
-            "//div[contains(text(), '个人中心')]",
-            "//div[contains(text(), '用户中心')]",
-            "//a[contains(@href, 'user')]",
-            "//a[contains(@href, 'center')]",
-        ]
-        
-        for selector in nav_selectors:
-            try:
-                element = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, selector)))
-                element.click()
-                log(f"账号 {account_index} - 点击导航元素: {selector}")
-                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                break
-            except:
-                continue
-        
-        driver.execute_script("window.scrollTo(0, 500);")
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        driver.refresh()
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         
     except Exception as e:
@@ -836,18 +752,14 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         
         navigate_and_interact_m_jlc(driver, account_index)
         
-        # 尝试多种方式提取token
-        access_token = extract_token_mixed(driver)
-        if not access_token:
-             # 如果前面两种方法都失败，尝试最后的手段：抓包
-             access_token = extract_token_from_devtools(driver)
+        # 使用新的提取方法
+        headers_result = extract_jlc_headers_from_devtools(driver)
         
-        secretkey = extract_secretkey_from_devtools(driver)
-        
-        result['token_extracted'] = bool(access_token)
-        result['secretkey_extracted'] = bool(secretkey)
-        
-        if access_token and secretkey:
+        if headers_result:
+            access_token, secretkey = headers_result
+            result['token_extracted'] = True
+            result['secretkey_extracted'] = True
+            
             log(f"账号 {account_index} - ✅ 成功提取 token 和 secretkey")
             
             jlc_client = JLCClient(access_token, secretkey, account_index, driver)
