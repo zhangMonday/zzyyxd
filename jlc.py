@@ -87,61 +87,60 @@ def with_retry(func, max_retries=5, delay=1):
         return None
     return wrapper
 
-@with_retry
-def extract_jlc_headers_from_devtools(driver):
+def wait_for_network_credentials(driver, account_index, timeout=25):
     """
-    使用 DevTools 从网络请求中提取 X-JLC-AccessToken 和 secretkey
-    一次性提取两个值，避免多次调用 get_log 导致日志被清空
+    等待 api/integrated/secret/update 请求，并从请求头中提取 X-JLC-AccessToken 和 secretkey
     """
-    token = None
-    secretkey = None
+    log(f"账号 {account_index} - ⏳ 正在等待 token 更新请求 (api/integrated/secret/update)...")
     
-    try:
-        logs = driver.get_log('performance')
-        
-        for entry in logs:
-            try:
-                message = json.loads(entry['message'])
-                message_type = message.get('message', {}).get('method', '')
-                
-                if message_type == 'Network.requestWillBeSent':
-                    request = message.get('message', {}).get('params', {}).get('request', {})
-                    url = request.get('url', '')
+    start_time = time.time()
+    found_token = None
+    found_secret = None
+    
+    while time.time() - start_time < timeout:
+        try:
+            # 获取性能日志
+            logs = driver.get_log('performance')
+            
+            for entry in logs:
+                try:
+                    message = json.loads(entry['message'])
+                    method = message.get('message', {}).get('method')
                     
-                    if 'm.jlc.com' in url:
-                        headers = request.get('headers', {})
+                    if method == 'Network.requestWillBeSent':
+                        params = message.get('message', {}).get('params', {})
+                        request = params.get('request', {})
+                        url = request.get('url', '')
                         
-                        # 提取 Token (尝试不同的大小写组合)
-                        if not token:
-                            token = (
-                                headers.get('x-jlc-accesstoken') or
-                                headers.get('X-JLC-AccessToken') or
-                                headers.get('X-Jlc-Accesstoken') or
-                                headers.get('token')
-                            )
-                        
-                        # 提取 SecretKey
-                        if not secretkey:
-                            secretkey = (
-                                headers.get('secretkey') or 
-                                headers.get('SecretKey') or
-                                headers.get('secretKey') or
-                                headers.get('SECRETKEY')
-                            )
-                        
-                        # 如果两个都找到了，直接返回
-                        if token and secretkey:
-                            log(f"✅ 从请求头中提取到 token: {token[:30]}...")
-                            log(f"✅ 从请求头中提取到 secretkey: {secretkey[:20]}...")
-                            return token, secretkey
-            except:
-                continue
-                
-    except Exception as e:
-        log(f"❌ DevTools 提取请求头出错: {e}")
-    
-    # 如果只找到其中一个或都没找到，返回 None 以触发重试
-    return None
+                        # 检查是否是目标 URL
+                        if 'api/integrated/secret/update' in url:
+                            headers = request.get('headers', {})
+                            
+                            # 遍历 Header 寻找 Token 和 SecretKey (忽略大小写)
+                            for key, value in headers.items():
+                                k_lower = key.lower()
+                                if k_lower == 'x-jlc-accesstoken':
+                                    found_token = value
+                                elif k_lower == 'secretkey':
+                                    found_secret = value
+                                
+                            if found_token:
+                                log(f"✅ 账号 {account_index} - 成功捕获更新请求，提取到 Token")
+                                if found_secret:
+                                    log(f"✅ 账号 {account_index} - 同时提取到 SecretKey")
+                                return found_token, found_secret
+                except Exception:
+                    continue
+            
+            # 如果没找到，稍微等待一下再检查新的日志
+            time.sleep(1)
+            
+        except Exception as e:
+            log(f"账号 {account_index} - ⚠ 监听网络请求时出错: {e}")
+            time.sleep(1)
+
+    log(f"❌ 账号 {account_index} - 等待 Token 更新请求超时")
+    return None, None
 
 def get_oshwhub_points(driver, account_index):
     """获取开源平台积分数量"""
@@ -248,18 +247,11 @@ class JLCClient:
             if attempt < max_retries - 1:
                 try:
                     self.driver.get("https://m.jlc.com/")
-                    self.driver.refresh()
-                    WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                    time.sleep(1 + random.uniform(0, 1))
-                    
-                    navigate_and_interact_m_jlc(self.driver, self.account_index)
-                    
-                    # 使用新的提取方法
-                    headers_result = extract_jlc_headers_from_devtools(self.driver)
-                    if headers_result:
-                        access_token, secretkey = headers_result
-                        self.headers['x-jlc-accesstoken'] = access_token
-                        self.headers['secretkey'] = secretkey
+                    token, secret = wait_for_network_credentials(self.driver, self.account_index)
+                    if token:
+                        self.headers['x-jlc-accesstoken'] = token
+                    if secret:
+                        self.headers['secretkey'] = secret
                 except:
                     pass  # 静默继续
         
@@ -391,23 +383,6 @@ class JLCClient:
         self.calculate_jindou_difference()
         
         return True
-
-def navigate_and_interact_m_jlc(driver, account_index):
-    """在 m.jlc.com 进行导航以触发网络请求"""
-    log(f"账号 {account_index} - 在 m.jlc.com 进行交互操作以触发网络请求...")
-    
-    try:
-        WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        
-        # 简单滚动页面，通常这足以触发后台的 API 请求
-        driver.execute_script("window.scrollTo(0, 300);")
-        time.sleep(1)
-        driver.execute_script("window.scrollTo(0, 600);")
-        
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        
-    except Exception as e:
-        log(f"账号 {account_index} - 交互操作出错: {e}")
 
 def is_sunday():
     """检查今天是否是周日"""
@@ -750,16 +725,13 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         log(f"账号 {account_index} - 已访问 m.jlc.com，等待页面加载...")
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         
-        navigate_and_interact_m_jlc(driver, account_index)
+        # 替换为新的等待请求逻辑，不再交互，同时获取 token 和 secretkey
+        access_token, secretkey = wait_for_network_credentials(driver, account_index)
         
-        # 使用新的提取方法
-        headers_result = extract_jlc_headers_from_devtools(driver)
+        result['token_extracted'] = bool(access_token)
+        result['secretkey_extracted'] = bool(secretkey)
         
-        if headers_result:
-            access_token, secretkey = headers_result
-            result['token_extracted'] = True
-            result['secretkey_extracted'] = True
-            
+        if access_token and secretkey:
             log(f"账号 {account_index} - ✅ 成功提取 token 和 secretkey")
             
             jlc_client = JLCClient(access_token, secretkey, account_index, driver)
@@ -778,8 +750,8 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
             else:
                 log(f"账号 {account_index} - ❌ 金豆签到流程失败")
         else:
-            log(f"账号 {account_index} - ❌ 无法提取到 token 或 secretkey，跳过金豆签到")
-            result['jindou_status'] = 'Token提取失败'
+            log(f"账号 {account_index} - ❌ 无法提取到 token 或 secretkey (超时)，跳过金豆签到")
+            result['jindou_status'] = 'Token提取超时'
 
     except Exception as e:
         log(f"账号 {account_index} - ❌ 程序执行错误: {e}")
