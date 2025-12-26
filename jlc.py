@@ -88,29 +88,68 @@ def with_retry(func, max_retries=5, delay=1):
     return wrapper
 
 @with_retry
-def extract_token_from_local_storage(driver):
-    """从 localStorage 提取 X-JLC-AccessToken"""
+def extract_token_mixed(driver):
+    """混合提取模式：先查localStorage，再查Cookies"""
+    # 1. 尝试从 localStorage 提取
     try:
         token = driver.execute_script("return window.localStorage.getItem('X-JLC-AccessToken');")
         if token:
             log(f"✅ 成功从 localStorage 提取 token: {token[:30]}...")
             return token
-        else:
-            alternative_keys = [
-                "x-jlc-accesstoken",
-                "accessToken", 
-                "token",
-                "X-JLC-AccessToken"
-            ]
-            for key in alternative_keys:
-                token = driver.execute_script(f"return window.localStorage.getItem('{key}');")
-                if token:
-                    log(f"✅ 从 localStorage 的 {key} 提取到 token: {token[:30]}...")
-                    return token
+        
+        alternative_keys = ["x-jlc-accesstoken", "accessToken", "token", "jlc-token"]
+        for key in alternative_keys:
+            token = driver.execute_script(f"return window.localStorage.getItem('{key}');")
+            if token:
+                log(f"✅ 从 localStorage 的 {key} 提取到 token: {token[:30]}...")
+                return token
     except Exception as e:
-        log(f"❌ 从 localStorage 提取 token 失败: {e}")
+        log(f"⚠ localStorage 提取失败: {e}")
+
+    # 2. 尝试从 Cookies 提取
+    try:
+        cookies = driver.get_cookies()
+        for cookie in cookies:
+            if cookie['name'] in ['X-JLC-AccessToken', 'x-jlc-accesstoken', 'accessToken']:
+                token = cookie['value']
+                log(f"✅ 成功从 Cookie 提取 token: {token[:30]}...")
+                return token
+    except Exception as e:
+        log(f"⚠ Cookie 提取失败: {e}")
     
     return None
+
+@with_retry
+def extract_token_from_devtools(driver):
+    """使用 DevTools 从网络请求头中提取 token (作为最后手段)"""
+    token = None
+    try:
+        logs = driver.get_log('performance')
+        for entry in logs:
+            try:
+                message = json.loads(entry['message'])
+                message_type = message.get('message', {}).get('method', '')
+                
+                # 检查请求头或响应头
+                headers = {}
+                if message_type == 'Network.requestWillBeSent':
+                    headers = message.get('message', {}).get('params', {}).get('request', {}).get('headers', {})
+                elif message_type == 'Network.responseReceived':
+                    headers = message.get('message', {}).get('params', {}).get('response', {}).get('requestHeaders', {})
+                
+                # 遍历查找 token
+                t = (headers.get('x-jlc-accesstoken') or 
+                     headers.get('X-JLC-AccessToken') or 
+                     headers.get('X-Jlc-Accesstoken'))
+                
+                if t:
+                    log(f"✅ 从网络请求头中提取到 token: {t[:20]}...")
+                    return t
+            except:
+                continue
+    except Exception as e:
+        log(f"❌ DevTools 提取 token 出错: {e}")
+    return token
 
 @with_retry
 def extract_secretkey_from_devtools(driver):
@@ -276,7 +315,12 @@ class JLCClient:
                     WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                     time.sleep(1 + random.uniform(0, 1))
                     navigate_and_interact_m_jlc(self.driver, self.account_index)
-                    access_token = extract_token_from_local_storage(self.driver)
+                    
+                    # 重新提取时也尝试多种方式
+                    access_token = extract_token_mixed(self.driver)
+                    if not access_token:
+                        access_token = extract_token_from_devtools(self.driver)
+                        
                     secretkey = extract_secretkey_from_devtools(self.driver)
                     if access_token:
                         self.headers['x-jlc-accesstoken'] = access_token
@@ -792,7 +836,12 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         
         navigate_and_interact_m_jlc(driver, account_index)
         
-        access_token = extract_token_from_local_storage(driver)
+        # 尝试多种方式提取token
+        access_token = extract_token_mixed(driver)
+        if not access_token:
+             # 如果前面两种方法都失败，尝试最后的手段：抓包
+             access_token = extract_token_from_devtools(driver)
+        
         secretkey = extract_secretkey_from_devtools(driver)
         
         result['token_extracted'] = bool(access_token)
