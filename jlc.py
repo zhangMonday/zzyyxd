@@ -100,7 +100,7 @@ def extract_token_from_local_storage(driver):
                 "x-jlc-accesstoken",
                 "accessToken", 
                 "token",
-                "jlc-token"
+                "X-JLC-AccessToken"
             ]
             for key in alternative_keys:
                 token = driver.execute_script(f"return window.localStorage.getItem('{key}');")
