@@ -19,17 +19,17 @@ if __name__ == "__main__":
     print("开始第 1 次运行")
     run_aliv3()
 
-    # 等 30 秒
-    print("等待 30 秒后进行第 2 次运行")
-    time.sleep(30)
+    # 等 15 秒
+    print("等待 15 秒后进行第 2 次运行")
+    time.sleep(15)
 
     # 第 2 次运行
     print("开始第 2 次运行")
     run_aliv3()
 
-    # 再等 30 秒
-    print("等待 10 秒后进行第 3 次运行")
-    time.sleep(10)
+    # 再等 60 秒
+    print("等待 60 秒后进行第 3 次运行")
+    time.sleep(60)
 
     # 第 3 次运行
     print("开始第 3 次运行")
