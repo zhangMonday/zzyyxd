@@ -29,8 +29,7 @@ class AliV3:
         self.sign_key1 = "YSKfst7GaVkXwZYvVihJsKF9r89koz"
         self.sign_key2 = "fpOKzILEajkqgSpr9VvU98FwAgIRcX"
         self.author = '古月'
-        
-        self.cache_file = 'auth_cache.json'
+        self.cache_file = 'cookies_cache.json'
         
         self.username = None
         self.password = None
@@ -59,7 +58,7 @@ class AliV3:
         ctx = execjs.compile(js)
         return ctx.call('Sign', params, key)
 
-    def getDeviceData(self):
+    def getDeviceData(self, ):
         with open('sign.js', 'r', encoding='utf-8') as f:
             js = f.read()
         ctx = execjs.compile(js)
@@ -210,6 +209,8 @@ class AliV3:
         print('deviceToekn', deviceToekn)
         print('_data', _data)
 
+        import requests
+
         cookies = {
             'device_id': 'c7d0a5f4b554477fae0e1ba29f84fb63',
             'HWWAFSESID': 'bcd7d8b4f625fb57ac',
@@ -272,70 +273,70 @@ class AliV3:
             try:
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     cache_data = json.load(f)
+                
                 timestamp = cache_data.get('timestamp', 0)
                 if time.time() - timestamp < 900:
-                    print("使用缓存的 Cookies 和 Headers")
+                    print(f"使用缓存配置 (更新于: {time.strftime('%H:%M:%S', time.localtime(timestamp))})")
                     return cache_data.get('cookies'), cache_data.get('headers')
                 else:
-                    print("缓存已过期，重新获取")
-            except:
-                print("读取缓存失败，重新获取")
+                    print("缓存已过期，重新获取...")
+            except Exception as e:
+                print(f"读取缓存失败: {e}")
 
-        print("正在调用 getcookie.py 获取动态 Cookies 和 Headers...")
-        process = subprocess.Popen(
-            [sys.executable, 'getcookie.py'], 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE
-        )
-        stdout, stderr = process.communicate()
-        
-        if process.returncode == 0:
-            output_str = stdout
-            start_marker = "cookies = {"
-            start_index = output_str.find(start_marker)
+        try:
+            print("调用 getcookie.py 获取参数...")
+            process = subprocess.Popen(
+                [sys.executable, 'getcookie.py'], 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = process.communicate()
             
-            if start_index != -1:
-                code_block = output_str[start_index:]
-                dedented_code = textwrap.dedent(code_block)
-                local_scope = {}
-                try:
-                    exec(dedented_code, {}, local_scope)
+            if process.returncode == 0:
+                output_str = stdout
+                start_marker = "cookies = {"
+                start_index = output_str.find(start_marker)
+                
+                if start_index != -1:
+                    code_block = output_str[start_index:]
+                    local_scope = {}
+                    try:
+                        exec(textwrap.dedent(code_block), {}, local_scope)
+                    except:
+                        exec(code_block, {}, local_scope)
+                        
                     cookies = local_scope.get('cookies')
                     headers = local_scope.get('headers')
-                    print("成功获取动态 Cookies 和 Headers")
                     
                     if cookies and headers:
-                        with open(self.cache_file, 'w', encoding='utf-8') as f:
-                            json.dump({
-                                'timestamp': time.time(),
-                                'cookies': cookies,
-                                'headers': headers
-                            }, f, ensure_ascii=False, indent=4)
-                        print("已更新永久缓存文件 auth_cache.json")
-                except Exception as e:
-                    print(f"解析输出失败: {e}")
-                    try:
-                        exec(code_block, {}, local_scope)
-                        cookies = local_scope.get('cookies')
-                        headers = local_scope.get('headers')
-                    except:
-                        pass
+                        try:
+                            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                                json.dump({
+                                    'timestamp': time.time(),
+                                    'cookies': cookies,
+                                    'headers': headers
+                                }, f, ensure_ascii=False, indent=4)
+                            print("配置已更新至缓存文件")
+                        except Exception as e:
+                            print(f"写入缓存失败: {e}")
+                else:
+                    print("getcookie.py 输出格式错误")
             else:
-                print("未找到 cookies 标记")
-        else:
-            print(f"getcookie.py 执行失败: {stderr}")
+                print(f"getcookie.py 执行出错: {stderr}")
+        except Exception as e:
+            print(f"获取参数异常: {e}")
 
         return cookies, headers
 
     def Login(self, username, password):
         if not self.captchaTicket:
-            print("Skipping login: No captchaTicket acquired.")
+            print("Skipping login: No captchaTicket.")
             return
 
         cookies, headers = self.get_auth_params()
 
         if cookies is None or headers is None:
-            print("错误：未能获取到 Cookies 或 Headers，退出程序。")
+            print("获取 Cookies/Headers 失败，退出")
             sys.exit(1)
 
         json_data = {
@@ -363,11 +364,12 @@ class AliV3:
         self.GetLog2()
         self.GetLog3()
         
-        self.Sumbit_All()
+        res = self.Sumbit_All()
         
         enc_username = pwdEncrypt(username)
         enc_password = pwdEncrypt(password)
         self.Login(enc_username, enc_password)
+        return res
 
 
 if __name__ == '__main__':
@@ -379,4 +381,3 @@ if __name__ == '__main__':
         ali.main(user_arg, pass_arg)
     else:
         print("用法: python AliV3.py <username> <password>")
-        print("示例: python AliV3.py 13800138000 MyPassword123")
