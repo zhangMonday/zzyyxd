@@ -87,134 +87,85 @@ def with_retry(func, max_retries=5, delay=1):
         return None
     return wrapper
 
-def trigger_interactions(driver):
-    """在页面上进行点击或刷新，以触发网络请求"""
+@with_retry
+def extract_token_from_local_storage(driver):
+    """从 localStorage 提取 X-JLC-AccessToken"""
     try:
-        # 尝试点击"我的"或"个人中心"
-        nav_selectors = [
-            "//div[contains(text(), '我的')]",
-            "//div[contains(text(), '个人中心')]",
-            "//div[contains(text(), '用户中心')]",
-            "//span[contains(text(), '我的')]",
-        ]
+        token = driver.execute_script("return window.localStorage.getItem('X-JLC-AccessToken');")
+        if token:
+            log(f"✅ 成功从 localStorage 提取 token: {token[:30]}...")
+            return token
+        else:
+            alternative_keys = [
+                "x-jlc-accesstoken",
+                "accessToken", 
+                "token",
+                "jlc-token"
+            ]
+            for key in alternative_keys:
+                token = driver.execute_script(f"return window.localStorage.getItem('{key}');")
+                if token:
+                    log(f"✅ 从 localStorage 的 {key} 提取到 token: {token[:30]}...")
+                    return token
+    except Exception as e:
+        log(f"❌ 从 localStorage 提取 token 失败: {e}")
+    
+    return None
+
+@with_retry
+def extract_secretkey_from_devtools(driver):
+    """使用 DevTools 从网络请求中提取 secretkey"""
+    secretkey = None
+    
+    try:
+        logs = driver.get_log('performance')
         
-        clicked = False
-        for selector in nav_selectors:
+        for entry in logs:
             try:
-                elems = driver.find_elements(By.XPATH, selector)
-                for elem in elems:
-                    if elem.is_displayed():
-                        driver.execute_script("arguments[0].click();", elem)
-                        clicked = True
-                        break
-                if clicked:
-                    break
+                message = json.loads(entry['message'])
+                message_type = message.get('message', {}).get('method', '')
+                
+                if message_type == 'Network.requestWillBeSent':
+                    request = message.get('message', {}).get('params', {}).get('request', {})
+                    url = request.get('url', '')
+                    
+                    if 'm.jlc.com' in url:
+                        headers = request.get('headers', {})
+                        secretkey = (
+                            headers.get('secretkey') or 
+                            headers.get('SecretKey') or
+                            headers.get('secretKey') or
+                            headers.get('SECRETKEY')
+                        )
+                        
+                        if secretkey:
+                            log(f"✅ 从请求中提取到 secretkey: {secretkey[:20]}...")
+                            return secretkey
+                
+                elif message_type == 'Network.responseReceived':
+                    response = message.get('message', {}).get('params', {}).get('response', {})
+                    url = response.get('url', '')
+                    
+                    if 'm.jlc.com' in url:
+                        headers = response.get('requestHeaders', {})
+                        secretkey = (
+                            headers.get('secretkey') or 
+                            headers.get('SecretKey') or
+                            headers.get('secretKey') or
+                            headers.get('SECRETKEY')
+                        )
+                        
+                        if secretkey:
+                            log(f"✅ 从响应中提取到 secretkey: {secretkey[:20]}...")
+                            return secretkey
+                            
             except:
                 continue
-        
-        if not clicked:
-            # 如果没找到按钮，就滚动一下
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(0.5)
-            driver.execute_script("window.scrollTo(0, 0);")
-    except:
-        pass
-
-def wait_for_network_headers(driver, timeout=30):
-    """
-    循环等待并从任意网络请求头或Cookie中提取 X-JLC-AccessToken。
-    不再限制 URL 必须包含 m.jlc.com，因为 API 可能在其他域名。
-    """
-    log("正在监听网络请求/Cookie，等待捕获有效的 X-JLC-AccessToken...")
-    start_time = time.time()
-    last_interaction_time = 0
-    
-    found_token = None
-    found_secret = None
-    
-    while time.time() - start_time < timeout:
-        # --- 策略1: 检查 Cookie (最快路径) ---
-        try:
-            cookies = driver.get_cookies()
-            for cookie in cookies:
-                name = cookie.get('name', '').lower()
-                value = cookie.get('value', '')
                 
-                if name == 'x-jlc-accesstoken':
-                    if value and value.upper() not in ['NONE', 'NULL', 'UNDEFINED'] and len(value) > 10:
-                        if not found_token:
-                            found_token = value
-                            log(f"✅ 成功从 Cookie 捕获 Token: {found_token[:20]}...")
-        except:
-            pass
-
-        # --- 策略2: 检查网络请求头 ---
-        try:
-            logs = driver.get_log('performance')
-            for entry in logs:
-                try:
-                    message = json.loads(entry['message'])
-                    message_type = message.get('message', {}).get('method', '')
-                    
-                    if message_type == 'Network.requestWillBeSent':
-                        params = message.get('message', {}).get('params', {})
-                        request = params.get('request', {})
-                        # 移除 URL 过滤，检查所有请求
-                        headers = request.get('headers', {})
-                        
-                        for key, value in headers.items():
-                            key_lower = key.lower()
-                            
-                            # 提取 Token
-                            if key_lower == 'x-jlc-accesstoken':
-                                if value and isinstance(value, str):
-                                    clean_val = value.strip().upper()
-                                    if clean_val not in ['NONE', 'UNDEFINED', 'NULL', ''] and len(value) > 10:
-                                        if not found_token:
-                                            found_token = value
-                                            log(f"✅ 成功从请求头捕获 Token: {found_token[:20]}...")
-                            
-                            # 提取 SecretKey
-                            if key_lower == 'secretkey':
-                                if value and isinstance(value, str):
-                                    clean_val = value.strip().upper()
-                                    if clean_val not in ['NONE', 'UNDEFINED', 'NULL', '']:
-                                        if not found_secret:
-                                            found_secret = value
-                                            log(f"✅ 成功从请求头捕获 SecretKey: {found_secret[:20]}...")
-                except:
-                    continue
-        except Exception as e:
-            log(f"读取日志异常: {e}")
-
-        # 判断是否完成
-        if found_token and found_secret:
-            return found_token, found_secret
-        
-        # 如果只拿到 Token，再多等一小会儿找 SecretKey
-        if found_token and (time.time() - start_time > 10):
-            return found_token, found_secret
-
-        # 交互逻辑：如果还没找到，且距离上次交互超过了 4 秒
-        current_time = time.time()
-        if current_time - last_interaction_time > 4:
-            log("⏳ 尚未捕获到完整信息，尝试刷新页面或点击...")
-            try:
-                if int(current_time) % 2 == 0:
-                    trigger_interactions(driver)
-                else:
-                    driver.refresh()
-                    WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            except:
-                pass
-            last_interaction_time = current_time
-            
-        time.sleep(0.5)
-            
-    if not found_token:
-        log("❌ 等待超时，未能在请求头或Cookie中抓取到有效的 X-JLC-AccessToken")
+    except Exception as e:
+        log(f"❌ DevTools 提取 secretkey 出错: {e}")
     
-    return found_token, found_secret
+    return secretkey
 
 def get_oshwhub_points(driver, account_index):
     """获取开源平台积分数量"""
@@ -321,9 +272,12 @@ class JLCClient:
             if attempt < max_retries - 1:
                 try:
                     self.driver.get("https://m.jlc.com/")
-                    # 重新从网络捕获 token
-                    access_token, secretkey = wait_for_network_headers(self.driver)
-                    
+                    self.driver.refresh()
+                    WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    time.sleep(1 + random.uniform(0, 1))
+                    navigate_and_interact_m_jlc(self.driver, self.account_index)
+                    access_token = extract_token_from_local_storage(self.driver)
+                    secretkey = extract_secretkey_from_devtools(self.driver)
                     if access_token:
                         self.headers['x-jlc-accesstoken'] = access_token
                     if secretkey:
@@ -466,14 +420,31 @@ def navigate_and_interact_m_jlc(driver, account_index):
     
     try:
         WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        
-        # 直接访问个人中心页面，这通常会触发更完整的加载
-        driver.get("https://m.jlc.com/mapp/pages/my/index")
+        driver.execute_script("window.scrollTo(0, 300);")
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         
-        driver.execute_script("window.scrollTo(0, 300);")
-        time.sleep(1)
-        driver.execute_script("window.scrollTo(0, 0);")
+        nav_selectors = [
+            "//div[contains(text(), '我的')]",
+            "//div[contains(text(), '个人中心')]",
+            "//div[contains(text(), '用户中心')]",
+            "//a[contains(@href, 'user')]",
+            "//a[contains(@href, 'center')]",
+        ]
+        
+        for selector in nav_selectors:
+            try:
+                element = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, selector)))
+                element.click()
+                log(f"账号 {account_index} - 点击导航元素: {selector}")
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                break
+            except:
+                continue
+        
+        driver.execute_script("window.scrollTo(0, 500);")
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        driver.refresh()
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         
     except Exception as e:
         log(f"账号 {account_index} - 交互操作出错: {e}")
@@ -590,6 +561,63 @@ def get_user_nickname_from_api(driver, account_index):
         log(f"账号 {account_index} - ⚠ 获取用户昵称失败: {e}")
         return None
 
+def get_ali_auth_code(username, password, account_index):
+    """调用 AliV3 获取 authCode"""
+    log(f"账号 {account_index} - 正在调用 登录(AliV3) 脚本获取 authCode...")
+    
+    if AliV3 is None:
+        log(f"账号 {account_index} - ❌ 登录依赖未正确加载")
+        return None, "依赖缺失", False
+
+    auth_code = None
+    ali_output = ""
+    is_password_error = False
+    
+    # 捕获 stdout
+    f = io.StringIO()
+    with redirect_stdout(f):
+        try:
+            # 实例化并运行
+            ali = AliV3()
+            ali.main(username=username, password=password)
+        except Exception as e:
+            print(f"Error executing AliV3: {e}")
+    
+    ali_output = f.getvalue()
+    
+    # 解析输出
+    lines = ali_output.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            
+            # 检查是否包含 authCode
+            if isinstance(data, dict) and data.get('success'):
+                inner_data = data.get('data')
+                if isinstance(inner_data, dict) and 'authCode' in inner_data:
+                    auth_code = inner_data['authCode']
+                    log(f"账号 {account_index} - ✅ 成功获取 authCode: {auth_code}")
+            
+            # 检查是否包含错误码 10208
+            if isinstance(data, dict) and data.get('code') == 10208:
+                msg = data.get('message', '账号或密码不正确')
+                log(f"账号 {account_index} - ❌ 检测到账号或密码错误 ({msg})")
+                is_password_error = True
+                return None, msg, is_password_error
+                
+        except json.JSONDecodeError:
+            continue
+            
+    if auth_code:
+        return auth_code, None, False
+    else:
+        log("❌登录脚本异常：")
+        log(ali_output)
+        return None, "登录脚本异常", False
+
 def sign_in_account(username, password, account_index, total_accounts, retry_count=0):
     """为单个账号执行完整的签到流程"""
     retry_label = ""
@@ -641,80 +669,32 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
     }
 
     try:
-        # 1. 登录流程
-        log(f"账号 {account_index} - 正在调用 登录(AliV3) 脚本进行登录...")
+        # 1. 登录流程 (Oshwhub)
+        auth_code, error_msg, is_pwd_err = get_ali_auth_code(username, password, account_index)
         
-        # 确保 AliV3 已加载
-        if AliV3 is None:
-             log(f"账号 {account_index} - ❌ 登录依赖未正确加载，无法登录")
-             result['oshwhub_status'] = '依赖缺失'
-             return result
-
-        auth_code = None
-        ali_output = ""
-        
-        # 捕获 stdout
-        f = io.StringIO()
-        with redirect_stdout(f):
-            try:
-                # 实例化并运行
-                ali = AliV3()
-                ali.main(username=username, password=password)
-            except Exception as e:
-                print(f"Error executing AliV3: {e}")
-        
-        ali_output = f.getvalue()
-        
-        # 解析输出
-        lines = ali_output.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                
-                # 检查是否包含 authCode
-                if isinstance(data, dict) and data.get('success'):
-                    inner_data = data.get('data')
-                    if isinstance(inner_data, dict) and 'authCode' in inner_data:
-                        auth_code = inner_data['authCode']
-                        log(f"账号 {account_index} - ✅ 成功获取 authCode: {auth_code}")
-                
-                # 检查是否包含错误码 10208
-                if isinstance(data, dict) and data.get('code') == 10208:
-                    msg = data.get('message', '账号或密码不正确')
-                    log(f"账号 {account_index} - ❌ 检测到账号或密码错误，跳过此账号 ({msg})")
-                    result['password_error'] = True
-                    result['oshwhub_status'] = '密码错误'
-                    return result
-                    
-            except json.JSONDecodeError:
-                continue
-        
-        # 判断登录结果
-        if auth_code:
-            # 拼接 URL 并跳转
-            login_url = f"https://oshwhub.com/sign_in?code={auth_code}"
-            log(f"账号 {account_index} - 正在使用 authCode 登录...")
-            driver.get(login_url)
+        if is_pwd_err:
+            result['password_error'] = True
+            result['oshwhub_status'] = '密码错误'
+            return result
             
-            # 等待登录成功 (通过检测URL或页面元素)
-            try:
-                # 等待页面加载且没有 error 提示，通常登录成功会跳转或停留在 oshwhub.com
-                WebDriverWait(driver, 20).until(
-                    lambda d: "oshwhub.com" in d.current_url and "code=" not in d.current_url
-                )
-                log(f"账号 {account_index} - ✅ 登录跳转成功")
-            except Exception:
-                log(f"账号 {account_index} - ⚠ 登录跳转超时或未检测到预期URL，尝试继续后续流程...")
-
-        else:
-            # 既没有 authCode 也没有密码错误信息
-            log("❌登录脚本异常：")
-            log(ali_output)  # 输出 AliV3 的全部内容
-            result['oshwhub_status'] = '登录脚本异常'
+        if not auth_code:
+            result['oshwhub_status'] = error_msg
             return result # 返回失败，触发外部重试
+
+        # 拼接 URL 并跳转
+        login_url = f"https://oshwhub.com/sign_in?code={auth_code}"
+        log(f"账号 {account_index} - 正在使用 authCode 登录开源平台...")
+        driver.get(login_url)
+        
+        # 等待登录成功 (通过检测URL或页面元素)
+        try:
+            # 等待页面加载且没有 error 提示，通常登录成功会跳转或停留在 oshwhub.com
+            WebDriverWait(driver, 20).until(
+                lambda d: "oshwhub.com" in d.current_url and "code=" not in d.current_url
+            )
+            log(f"账号 {account_index} - ✅ 登录跳转成功")
+        except Exception:
+            log(f"账号 {account_index} - ⚠ 登录跳转超时或未检测到预期URL，尝试继续后续流程...")
 
         # 3. 获取用户昵称
         time.sleep(2) # 稍作等待确保 Cookie 生效
@@ -816,40 +796,67 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         # 9. 金豆签到流程
         log(f"账号 {account_index} - 开始金豆签到流程...")
         
-        # 访问 m.jlc.com
-        driver.get("https://m.jlc.com/")
-        log(f"账号 {account_index} - 已访问 m.jlc.com，等待页面加载...")
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        # 再次获取 AuthCode 用于金豆登录
+        time.sleep(2) # 稍微等待一下
+        log(f"账号 {account_index} - 正在重新获取 authCode 以登录 m.jlc.com...")
+        auth_code_jlc, error_msg_jlc, is_pwd_err_jlc = get_ali_auth_code(username, password, account_index)
         
-        navigate_and_interact_m_jlc(driver, account_index)
+        if is_pwd_err_jlc:
+            # 理论上不会走到这里，因为前面已经成功过一次，但为了健壮性
+            result['password_error'] = True
+            result['jindou_status'] = '密码错误'
+            return result
         
-        # 改用新的监听网络请求的方式获取 token 和 secretkey
-        access_token, secretkey = wait_for_network_headers(driver)
-        
-        result['token_extracted'] = bool(access_token)
-        result['secretkey_extracted'] = bool(secretkey)
-        
-        if access_token and secretkey:
-            log(f"账号 {account_index} - ✅ 成功从网络请求捕获 token 和 secretkey")
+        if auth_code_jlc:
+            # 构造嘉立创统一登录 URL，重定向到 m.jlc.com
+            # URL Encode: https://m.jlc.com/ -> https%3A%2F%2Fm.jlc.com%2F
+            jlc_login_url = f"https://passport.jlc.com/login?code={auth_code_jlc}&redirectUrl=https%3A%2F%2Fm.jlc.com%2F"
             
-            jlc_client = JLCClient(access_token, secretkey, account_index, driver)
-            jindou_success = jlc_client.execute_full_process()
+            log(f"账号 {account_index} - 正在使用 authCode 跳转登录 m.jlc.com...")
+            driver.get(jlc_login_url)
             
-            # 记录金豆签到结果
-            result['jindou_success'] = jindou_success
-            result['jindou_status'] = jlc_client.sign_status
-            result['initial_jindou'] = jlc_client.initial_jindou
-            result['final_jindou'] = jlc_client.final_jindou
-            result['jindou_reward'] = jlc_client.jindou_reward
-            result['has_jindou_reward'] = jlc_client.has_reward
+            # 等待跳转完成 (URL 包含 m.jlc.com)
+            try:
+                WebDriverWait(driver, 20).until(lambda d: "m.jlc.com" in d.current_url)
+                log(f"账号 {account_index} - ✅ m.jlc.com 登录跳转成功")
+            except Exception:
+                log(f"账号 {account_index} - ⚠ m.jlc.com 登录跳转超时，尝试继续...")
+
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             
-            if jindou_success:
-                log(f"账号 {account_index} - ✅ 金豆签到流程完成")
+            # 继续原本的交互和提取逻辑
+            navigate_and_interact_m_jlc(driver, account_index)
+            
+            access_token = extract_token_from_local_storage(driver)
+            secretkey = extract_secretkey_from_devtools(driver)
+            
+            result['token_extracted'] = bool(access_token)
+            result['secretkey_extracted'] = bool(secretkey)
+            
+            if access_token and secretkey:
+                log(f"账号 {account_index} - ✅ 成功提取 token 和 secretkey")
+                
+                jlc_client = JLCClient(access_token, secretkey, account_index, driver)
+                jindou_success = jlc_client.execute_full_process()
+                
+                # 记录金豆签到结果
+                result['jindou_success'] = jindou_success
+                result['jindou_status'] = jlc_client.sign_status
+                result['initial_jindou'] = jlc_client.initial_jindou
+                result['final_jindou'] = jlc_client.final_jindou
+                result['jindou_reward'] = jlc_client.jindou_reward
+                result['has_jindou_reward'] = jlc_client.has_reward
+                
+                if jindou_success:
+                    log(f"账号 {account_index} - ✅ 金豆签到流程完成")
+                else:
+                    log(f"账号 {account_index} - ❌ 金豆签到流程失败")
             else:
-                log(f"账号 {account_index} - ❌ 金豆签到流程失败")
+                log(f"账号 {account_index} - ❌ 无法提取到 token 或 secretkey，跳过金豆签到")
+                result['jindou_status'] = 'Token提取失败'
         else:
-            log(f"账号 {account_index} - ❌ 无法从网络请求捕获到 token 或 secretkey，跳过金豆签到")
-            result['jindou_status'] = 'Token捕获失败'
+            log(f"账号 {account_index} - ❌ 获取金豆登录 authCode 失败: {error_msg_jlc}")
+            result['jindou_status'] = '获取AuthCode失败'
 
     except Exception as e:
         log(f"账号 {account_index} - ❌ 程序执行错误: {e}")
