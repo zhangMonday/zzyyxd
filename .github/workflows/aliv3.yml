@@ -25,11 +25,12 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r ./requirements.txt
-          pip install PyExecJS
+          pip install PyExecJs
+          pip install subprocess
 
       - name: '准备Chrome驱动'
         uses: nanasess/setup-chromedriver@v2
 
-      - name: 'aliv3'
+      - name: '测试aliv3'
         run: |
-          python ./AliV3.py 10754308A Aa123123
+          python ./testaliv3.py
