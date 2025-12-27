@@ -87,86 +87,6 @@ def with_retry(func, max_retries=5, delay=1):
         return None
     return wrapper
 
-@with_retry
-def extract_token_from_local_storage(driver):
-    """从 localStorage 提取 X-JLC-AccessToken"""
-    try:
-        token = driver.execute_script("return window.localStorage.getItem('X-JLC-AccessToken');")
-        if token:
-            log(f"✅ 成功从 localStorage 提取 token: {token[:30]}...")
-            return token
-        else:
-            alternative_keys = [
-                "x-jlc-accesstoken",
-                "accessToken", 
-                "token",
-                "jlc-token"
-            ]
-            for key in alternative_keys:
-                token = driver.execute_script(f"return window.localStorage.getItem('{key}');")
-                if token:
-                    log(f"✅ 从 localStorage 的 {key} 提取到 token: {token[:30]}...")
-                    return token
-    except Exception as e:
-        log(f"❌ 从 localStorage 提取 token 失败: {e}")
-    
-    return None
-
-@with_retry
-def extract_secretkey_from_devtools(driver):
-    """使用 DevTools 从网络请求中提取 secretkey"""
-    secretkey = None
-    
-    try:
-        logs = driver.get_log('performance')
-        
-        for entry in logs:
-            try:
-                message = json.loads(entry['message'])
-                message_type = message.get('message', {}).get('method', '')
-                
-                if message_type == 'Network.requestWillBeSent':
-                    request = message.get('message', {}).get('params', {}).get('request', {})
-                    url = request.get('url', '')
-                    
-                    if 'm.jlc.com' in url:
-                        headers = request.get('headers', {})
-                        secretkey = (
-                            headers.get('secretkey') or 
-                            headers.get('SecretKey') or
-                            headers.get('secretKey') or
-                            headers.get('SECRETKEY')
-                        )
-                        
-                        if secretkey:
-                            log(f"✅ 从请求中提取到 secretkey: {secretkey[:20]}...")
-                            return secretkey
-                
-                elif message_type == 'Network.responseReceived':
-                    response = message.get('message', {}).get('params', {}).get('response', {})
-                    url = response.get('url', '')
-                    
-                    if 'm.jlc.com' in url:
-                        headers = response.get('requestHeaders', {})
-                        secretkey = (
-                            headers.get('secretkey') or 
-                            headers.get('SecretKey') or
-                            headers.get('secretKey') or
-                            headers.get('SECRETKEY')
-                        )
-                        
-                        if secretkey:
-                            log(f"✅ 从响应中提取到 secretkey: {secretkey[:20]}...")
-                            return secretkey
-                            
-            except:
-                continue
-                
-    except Exception as e:
-        log(f"❌ DevTools 提取 secretkey 出错: {e}")
-    
-    return secretkey
-
 def get_oshwhub_points(driver, account_index):
     """获取开源平台积分数量"""
     max_retries = 5
@@ -268,16 +188,12 @@ class JLCClient:
                 jindou_count = data.get('data', {}).get('integralVoucher', 0)
                 return jindou_count
             
-            # 重试前刷新页面，重新提取 token 和 secretkey
+            # 重试前刷新页面
             if attempt < max_retries - 1:
                 try:
-                    self.driver.get("https://m.jlc.com/")
                     self.driver.refresh()
                     WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                     time.sleep(1 + random.uniform(0, 1))
-                    # 注意：这里可能需要新的逻辑来重新获取 token，因为 navigate_and_interact_m_jlc 可能已不再使用
-                    # 如果需要重试，可能需要重新走一次 auth 流程
-                    pass 
                 except:
                     pass  # 静默继续
         
@@ -580,6 +496,89 @@ def get_auth_code_from_aliv3(username, password, account_index):
         
     return auth_code, password_error, error_msg
 
+# ==========================================
+# 提取凭证的核心函数 (Token & SecretKey)
+# ==========================================
+
+def extract_token_from_local(driver):
+    """仅从 localStorage 尝试提取 token"""
+    try:
+        token = driver.execute_script("return window.localStorage.getItem('X-JLC-AccessToken');")
+        if token and token != "NONE" and len(token) > 5:
+            return token
+    except:
+        pass
+    return None
+
+def parse_logs_for_credentials(logs):
+    """解析网络日志提取 token 和 secretkey"""
+    token = None
+    secret = None
+    
+    for entry in logs:
+        try:
+            message = json.loads(entry['message'])
+            method = message.get('message', {}).get('method', '')
+            params = message.get('message', {}).get('params', {})
+
+            headers = {}
+            if method == 'Network.requestWillBeSent':
+                headers = params.get('request', {}).get('headers', {})
+            elif method == 'Network.responseReceived':
+                headers = params.get('response', {}).get('requestHeaders', {})
+            
+            # 遍历 headers 查找 (忽略大小写)
+            for k, v in headers.items():
+                k_lower = k.lower()
+                if k_lower == 'x-jlc-accesstoken':
+                    if v and v != "NONE" and len(v) > 5:
+                        token = v
+                elif k_lower == 'secretkey':
+                    if v and len(v) > 5:
+                        secret = v
+        except:
+            continue
+            
+    return token, secret
+
+def wait_for_credentials(driver, timeout=20):
+    """
+    等待并提取 Token 和 SecretKey
+    逻辑：循环检查，同时查看 localStorage 和 网络日志
+    """
+    start_time = time.time()
+    access_token = None
+    secretkey = None
+    
+    while time.time() - start_time < timeout:
+        # 1. 尝试从 localStorage 获取 token (如果尚未获取)
+        if not access_token:
+            access_token = extract_token_from_local(driver)
+        
+        # 2. 读取网络日志 (这是一次性操作，读完就没了，所以必须每次循环都读并累积结果)
+        try:
+            logs = driver.get_log('performance')
+            t_net, s_net = parse_logs_for_credentials(logs)
+            
+            # 如果 localStorage 没拿到，尝试用网络的
+            if not access_token and t_net:
+                access_token = t_net
+            
+            # SecretKey 主要靠网络日志
+            if not secretkey and s_net:
+                secretkey = s_net
+                
+        except Exception:
+            pass
+        
+        # 3. 检查是否都拿到了
+        if access_token and secretkey:
+            return access_token, secretkey
+        
+        time.sleep(1)
+        
+    return access_token, secretkey
+
 def sign_in_account(username, password, account_index, total_accounts, retry_count=0):
     """为单个账号执行完整的签到流程"""
     retry_label = ""
@@ -761,7 +760,6 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         jindou_auth_code, jindou_pwd_error, _ = get_auth_code_from_aliv3(username, password, account_index)
         
         if jindou_pwd_error:
-            # 理论上 Oshwhub 登录已经检查过密码了，这里不应该发生，但防万一
             result['password_error'] = True
             result['jindou_status'] = '密码错误'
             return result
@@ -771,26 +769,19 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
             log(f"账号 {account_index} - 正在携带 authCode 访问 m.jlc.com 个人中心...")
             driver.get(target_url)
             
-            # 等待页面加载和Token写入
+            # 等待页面加载
             WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             
-            log(f"账号 {account_index} - 等待 5 秒让页面处理登录逻辑...")
-            time.sleep(5) 
-            
-            log(f"账号 {account_index} - 刷新页面以确保 Token 加载...")
-            driver.refresh()
-            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(3) # 刷新后再等待一下
-            
-            # 提取 Token
-            access_token = extract_token_from_local_storage(driver)
-            secretkey = extract_secretkey_from_devtools(driver)
+            # 使用新的等待提取函数
+            log(f"账号 {account_index} - 正在提取凭证(Token/SecretKey)...")
+            access_token, secretkey = wait_for_credentials(driver, timeout=20)
             
             result['token_extracted'] = bool(access_token)
             result['secretkey_extracted'] = bool(secretkey)
             
             if access_token and secretkey:
-                log(f"账号 {account_index} - ✅ 成功提取 token 和 secretkey")
+                log(f"账号 {account_index} - ✅ 成功提取 token: {access_token[:20]}...")
+                log(f"账号 {account_index} - ✅ 成功提取 secretkey: {secretkey[:20]}...")
                 
                 jlc_client = JLCClient(access_token, secretkey, account_index, driver)
                 jindou_success = jlc_client.execute_full_process()
